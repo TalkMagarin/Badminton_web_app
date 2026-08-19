@@ -17,7 +17,7 @@ export async function renderRoom(root, roomId) {
     </header>
     <main class="room-detail"><div class="empty">불러오는 중…</div></main>
   `;
-  root.querySelector('#btn-back').addEventListener('click', () => go('lobby'));
+  root.querySelector('#btn-back').addEventListener('click', () => go('myrooms'));
   await load(roomId);
   subscribe(roomId);
 }
