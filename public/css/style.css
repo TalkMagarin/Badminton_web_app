@@ -1,6 +1,7 @@
+/* 메인 폰트 — OmuDaye (오뮤 다예쁨체) */
 @font-face {
-  font-family: 'MitmiFont';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2402_1@1.0/Ownglyph_meetme-Rg.woff2') format('woff2');
+  font-family: 'OmuDaye';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2304-01@1.0/omyu_pretty.woff2') format('woff2');
   font-weight: normal;
   font-display: swap;
 }
@@ -31,7 +32,7 @@ html, body {
   padding: 0;
   background: #e9eaf4;
   color: var(--ink);
-  font-family: 'MitmiFont', "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, -apple-system, sans-serif;
+  font-family: 'OmuDaye', "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, -apple-system, sans-serif;
   -webkit-text-size-adjust: 100%;
 }
 
