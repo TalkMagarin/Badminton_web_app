@@ -180,9 +180,9 @@ begin
   if ok is distinct from true then
     return false;
   end if;
-  -- 비공개 모임은 암호가 곧 승인 → approved 참여자로 등록
+  -- 공개·비공개 모두 '가입요청(pending)' → 모임장/운영진 승인 필요
   insert into room_members(room_id, user_id, role, status)
-  values (p_room_id, auth.uid(), 'member', 'approved')
+  values (p_room_id, auth.uid(), 'member', 'pending')
   on conflict do nothing;
   return true;
 end;

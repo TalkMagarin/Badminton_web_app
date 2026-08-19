@@ -251,7 +251,8 @@ function openPasswordPrompt(room) {
         <label class="field"><span>모임 암호</span>
           <input name="pw" type="password" placeholder="암호를 입력하세요" autocomplete="off" required />
         </label>
-        <button type="submit" class="btn btn-primary">입장하기</button>
+        <small class="hint">암호 확인 후 가입요청이 접수돼요. 모임장·운영진 승인 후 참여됩니다.</small>
+        <button type="submit" class="btn btn-primary">가입요청</button>
       </form>
     </div>
   `;
@@ -268,9 +269,9 @@ function openPasswordPrompt(room) {
     btn.textContent = '확인 중…';
     const { data, error } = await sb.rpc('join_room_with_password', { p_room_id: room.id, p_password: pw });
     btn.disabled = false;
-    btn.textContent = '입장하기';
-    if (error) { console.error(error); return toast('입장에 실패했습니다.', 'error'); }
-    if (data === true) { close(); go('room', { roomId: room.id }); }
+    btn.textContent = '가입요청';
+    if (error) { console.error(error); return toast('요청에 실패했습니다.', 'error'); }
+    if (data === true) { close(); toast('가입 요청을 보냈어요!', 'success'); go('room', { roomId: room.id }); }
     else toast('암호가 올바르지 않아요.', 'error');
   });
   setTimeout(() => modal.querySelector('input[name=pw]')?.focus(), 50);
@@ -338,7 +339,7 @@ function openCreateModal() {
     const priv = b.dataset.v === 'true';
     hidden.value = b.dataset.v;
     visHint.textContent = priv
-      ? '모임 찾기에선 숨겨지고, 모임명 전체 검색 시 나와요. 암호로 입장해요.'
+      ? '모임 찾기에선 숨겨지고, 모임명 전체 검색 시 나와요. 암호 입력 후 가입요청해요.'
       : '누구나 모임 찾기에서 볼 수 있어요';
     pwField.style.display = priv ? '' : 'none';
     if (!priv) pwInput.value = '';
