@@ -48,7 +48,20 @@ create table if not exists public.room_members (
   primary key (room_id, user_id)
 );
 
+-- 역할/가입상태/운영진 권한 (마이그레이션 포함)
+alter table public.room_members add column if not exists role text not null default 'member';           -- owner | staff | member
+alter table public.room_members add column if not exists status text not null default 'approved';        -- pending | approved
+alter table public.room_members add column if not exists can_approve boolean not null default false;      -- 가입승인 권한(운영진)
+alter table public.room_members add column if not exists can_reject boolean not null default false;       -- 가입거부 권한(운영진)
+alter table public.room_members add column if not exists can_create_event boolean not null default false; -- 정모/번개 생성 권한(운영진)
+
+-- 기존 방장 멤버십을 owner 역할로 복구(마이그레이션 기본값 보정)
+update public.room_members m set role = 'owner'
+  from public.rooms r
+ where m.room_id = r.id and m.user_id = r.host_id and m.role <> 'owner';
+
 create index if not exists room_members_user_idx on public.room_members(user_id);
+create index if not exists room_members_status_idx on public.room_members(room_id, status);
 create index if not exists rooms_status_idx on public.rooms(status);
 
 -- ============================================================
@@ -93,11 +106,14 @@ drop policy if exists room_members_select on public.room_members;
 create policy room_members_select on public.room_members
   for select to authenticated using (true);
 
--- 공개 모임에만 직접 참여 가능. 비공개 모임은 아래 join_room_with_password() 로만 참여.
+-- 공개 모임에는 '가입요청'(pending)만 직접 생성 가능. 승인/역할/권한 변경은 아래 함수로만.
+-- 비공개 모임 참여는 join_room_with_password() 로만.
 drop policy if exists room_members_insert on public.room_members;
 create policy room_members_insert on public.room_members
   for insert to authenticated with check (
     user_id = auth.uid()
+    and status = 'pending' and role = 'member'
+    and can_approve = false and can_reject = false and can_create_event = false
     and exists (select 1 from public.rooms r where r.id = room_id and r.is_private = false)
   );
 
@@ -111,8 +127,8 @@ create policy room_members_delete on public.room_members
 create or replace function public.add_host_as_member()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.room_members(room_id, user_id)
-  values (new.id, new.host_id)
+  insert into public.room_members(room_id, user_id, role, status)
+  values (new.id, new.host_id, 'owner', 'approved')
   on conflict do nothing;
   return new;
 end;
@@ -164,8 +180,9 @@ begin
   if ok is distinct from true then
     return false;
   end if;
-  insert into room_members(room_id, user_id)
-  values (p_room_id, auth.uid())
+  -- 비공개 모임은 암호가 곧 승인 → approved 참여자로 등록
+  insert into room_members(room_id, user_id, role, status)
+  values (p_room_id, auth.uid(), 'member', 'approved')
   on conflict do nothing;
   return true;
 end;
@@ -173,6 +190,111 @@ $$;
 
 grant execute on function public.set_room_password(uuid, text) to authenticated;
 grant execute on function public.join_room_with_password(uuid, text) to authenticated;
+
+-- ============================================================
+--  운영진/가입승인/승계/삭제 관리 함수 (SECURITY DEFINER)
+-- ============================================================
+
+-- 요청자에게 특정 권한이 있는지 (owner 는 모든 권한)
+create or replace function public.has_room_perm(p_room_id uuid, p_perm text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from room_members
+    where room_id = p_room_id and user_id = auth.uid() and status = 'approved'
+      and ( role = 'owner'
+            or (role = 'staff' and (
+                 (p_perm = 'approve' and can_approve)
+              or (p_perm = 'reject'  and can_reject)
+              or (p_perm = 'event'   and can_create_event)
+            )))
+  );
+$$;
+
+-- 가입 승인
+create or replace function public.approve_member(p_room_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not has_room_perm(p_room_id, 'approve') then raise exception 'no permission'; end if;
+  update room_members set status = 'approved'
+   where room_id = p_room_id and user_id = p_user and status = 'pending';
+end;
+$$;
+
+-- 가입 거부(요청 삭제)
+create or replace function public.reject_member(p_room_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not has_room_perm(p_room_id, 'reject') then raise exception 'no permission'; end if;
+  delete from room_members
+   where room_id = p_room_id and user_id = p_user and status = 'pending';
+end;
+$$;
+
+-- 운영진 지정/권한 설정 (owner 만). p_role: 'staff' | 'member'
+create or replace function public.set_member_role(
+  p_room_id uuid, p_user uuid, p_role text,
+  p_can_approve boolean, p_can_reject boolean, p_can_event boolean
+) returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from room_members
+                 where room_id = p_room_id and user_id = auth.uid()
+                   and role = 'owner' and status = 'approved') then
+    raise exception 'only owner';
+  end if;
+  if p_role not in ('staff', 'member') then raise exception 'bad role'; end if;
+  update room_members
+     set role = p_role,
+         can_approve = case when p_role = 'staff' then coalesce(p_can_approve,false) else false end,
+         can_reject  = case when p_role = 'staff' then coalesce(p_can_reject,false)  else false end,
+         can_create_event = case when p_role = 'staff' then coalesce(p_can_event,false) else false end
+   where room_id = p_room_id and user_id = p_user and status = 'approved' and role <> 'owner';
+end;
+$$;
+
+-- 모임장 승계 (owner 만). 대상은 approved 참여자여야 함.
+create or replace function public.transfer_ownership(p_room_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from room_members
+                 where room_id = p_room_id and user_id = auth.uid()
+                   and role = 'owner' and status = 'approved') then
+    raise exception 'only owner';
+  end if;
+  if not exists (select 1 from room_members
+                 where room_id = p_room_id and user_id = p_user and status = 'approved') then
+    raise exception 'target not member';
+  end if;
+  -- 기존 모임장 → 일반 참여자
+  update room_members set role = 'member', can_approve = false, can_reject = false, can_create_event = false
+   where room_id = p_room_id and user_id = auth.uid();
+  -- 새 모임장
+  update room_members set role = 'owner', can_approve = false, can_reject = false, can_create_event = false
+   where room_id = p_room_id and user_id = p_user;
+  update rooms set host_id = p_user where id = p_room_id;
+end;
+$$;
+
+-- 모임 삭제 (owner 만, 다른 참여자가 0명일 때만)
+create or replace function public.delete_empty_room(p_room_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare others int;
+begin
+  if not exists (select 1 from rooms where id = p_room_id and host_id = auth.uid()) then
+    raise exception 'only owner';
+  end if;
+  select count(*) into others from room_members
+   where room_id = p_room_id and status = 'approved' and role <> 'owner';
+  if others > 0 then raise exception 'room not empty'; end if;
+  delete from rooms where id = p_room_id;  -- room_members/room_passwords 는 cascade
+end;
+$$;
+
+grant execute on function public.has_room_perm(uuid, text) to authenticated;
+grant execute on function public.approve_member(uuid, uuid) to authenticated;
+grant execute on function public.reject_member(uuid, uuid) to authenticated;
+grant execute on function public.set_member_role(uuid, uuid, text, boolean, boolean, boolean) to authenticated;
+grant execute on function public.transfer_ownership(uuid, uuid) to authenticated;
+grant execute on function public.delete_empty_room(uuid) to authenticated;
 
 -- PostgREST 스키마 캐시 새로고침(새 함수 인식)
 notify pgrst, 'reload schema';

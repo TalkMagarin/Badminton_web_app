@@ -132,7 +132,7 @@ function paintRooms() {
           <div class="room-main">
             <div class="room-title">${esc(r.title)} ${badges}</div>
             ${sub}
-            <div class="room-host">방장 ${esc(r.host?.name || '알 수 없음')}</div>
+            <div class="room-host">모임장 ${esc(r.host?.name || '알 수 없음')}</div>
           </div>
           <div class="room-count ${full ? 'is-full' : ''}">
             <span class="count-num">${cnt}/${r.max_members}</span>
@@ -148,28 +148,12 @@ function paintRooms() {
 }
 
 // ---------- 참여 ----------
+// 목록에서 모임을 누르면 방 화면으로 진입(가입은 방 안에서 '가입요청' → 승인).
+// 비공개 모임(내가 방장이 아님)은 암호 입력 후 입장.
 async function onJoin(roomId) {
   const room = roomsCache.find((r) => r.id === roomId);
   const uid = store.session.user.id;
-
-  // 방장은 바로 입장(이미 참여자)
-  if (room && room.host_id === uid) return go('room', { roomId });
-
-  // 비공개 모임은 암호 입력 후 입장
-  if (room && room.is_private) return openPasswordPrompt(room);
-
-  // 공개 모임: 정원 체크 후 직접 참여
-  const cnt = room ? memberCount(room) : 0;
-  const isFull = room && cnt >= room.max_members;
-  const { error } = await sb.from('room_members').insert({ room_id: roomId, user_id: uid });
-  if (error) {
-    if (error.code === '23505' || (error.message || '').includes('duplicate')) {
-      return go('room', { roomId }); // 이미 참여 중
-    }
-    if (isFull) return toast('정원이 가득 찼어요.', 'error');
-    console.error(error);
-    return toast('입장에 실패했습니다.', 'error');
-  }
+  if (room && room.is_private && room.host_id !== uid) return openPasswordPrompt(room);
   go('room', { roomId });
 }
 
