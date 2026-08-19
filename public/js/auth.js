@@ -108,6 +108,14 @@ function signupView() {
         <input name="name" placeholder="이름" required />
       </label>
       <div class="field">
+        <span>성별</span>
+        <div class="segmented" id="seg-gender">
+          <button type="button" class="seg-btn" data-v="male">남자</button>
+          <button type="button" class="seg-btn" data-v="female">여자</button>
+        </div>
+        <input type="hidden" name="gender" value="" />
+      </div>
+      <div class="field">
         <span>구력 (운동 시작 년·월)</span>
         <div class="field-row" id="exp-mount"></div>
         <small class="hint" id="exp-hint">운동 시작 년·월을 선택하세요</small>
@@ -162,6 +170,16 @@ function signupView() {
   wrap.querySelector('#region-mount').append(regionDd.el);
   wrap.querySelector('#national-mount').append(nationalDd.el);
 
+  // 성별 세그먼트
+  const genderSeg = wrap.querySelector('#seg-gender');
+  const genderInput = wrap.querySelector('input[name=gender]');
+  genderSeg.addEventListener('click', (e) => {
+    const b = e.target.closest('.seg-btn');
+    if (!b) return;
+    genderSeg.querySelectorAll('.seg-btn').forEach((x) => x.classList.toggle('active', x === b));
+    genderInput.value = b.dataset.v;
+  });
+
   wrap.querySelector('#signup-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type=submit]');
@@ -169,6 +187,7 @@ function signupView() {
     const username = String(fd.get('username') || '').trim();
     const password = String(fd.get('password') || '');
     const name = String(fd.get('name') || '').trim();
+    const gender = String(fd.get('gender') || '');
     const y = yearDd.get();
     const m = monthDd.get();
 
@@ -177,6 +196,7 @@ function signupView() {
       return toast('아이디는 영문/숫자 3~20자로 입력하세요.', 'error');
     if (password.length < 6) return toast('비밀번호는 6자 이상이어야 합니다.', 'error');
     if (!name) return toast('이름을 입력하세요.', 'error');
+    if (gender !== 'male' && gender !== 'female') return toast('성별을 선택하세요.', 'error');
     if (!y || !m) return toast('구력(운동 시작 년·월)을 선택하세요.', 'error');
     if (new Date(Number(y), Number(m) - 1, 1) > new Date(nowY, nowM - 1, 1))
       return toast('구력은 미래로 설정할 수 없어요.', 'error');
@@ -186,6 +206,7 @@ function signupView() {
         username,
         password,
         name,
+        gender,
         expStart: `${y}-${String(m).padStart(2, '0')}-01`,
         gradeRegion: regionDd.get() || null, // 없음 → null
         gradeNational: nationalDd.get() || null,
@@ -198,7 +219,7 @@ function signupView() {
 }
 
 // 실제 가입 처리 (검증은 호출부에서 완료)
-async function submitSignup({ username, password, name, expStart, gradeRegion, gradeNational }, btn) {
+async function submitSignup({ username, password, name, gender, expStart, gradeRegion, gradeNational }, btn) {
   btn.disabled = true;
   btn.textContent = '가입 중…';
   store.suppressRoute = true; // 프로필 insert 전 자동 라우팅 방지
@@ -224,6 +245,7 @@ async function submitSignup({ username, password, name, expStart, gradeRegion, g
       id: uid,
       username,
       name,
+      gender,
       exp_start: expStart,
       grade_region: gradeRegion,
       grade_national: gradeNational,

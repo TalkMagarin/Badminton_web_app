@@ -1,7 +1,7 @@
 // 게임 상세: 참여자(모임원) 로스터 + 대기/게임중 매치(코트 운영)
 import { sb } from './supabase.js';
 import { store, go } from './app.js';
-import { esc, initials, fmtDateTime, toast } from './util.js';
+import { esc, initials, fmtDateTime, expText, gradeSummary, toast } from './util.js';
 
 let rootEl = null;
 let gctx = null; // { gameId, game, participants, matches, canManage, statusMap }
@@ -24,7 +24,7 @@ export async function renderGame(root, gameId) {
 async function load(gameId) {
   const [gameRes, partRes, matchRes] = await Promise.all([
     sb.from('games').select('id, room_id, play_at, location, courts, max_players').eq('id', gameId).maybeSingle(),
-    sb.from('game_participants').select('user:profiles(id, name, avatar_url)').eq('game_id', gameId),
+    sb.from('game_participants').select('games_played, user:profiles(id, name, avatar_url, gender, exp_start, grade_region, grade_national)').eq('game_id', gameId),
     sb.from('matches').select('id, status, court, created_at, players:match_players(user:profiles(id, name, avatar_url))').eq('game_id', gameId).order('created_at', { ascending: true }),
   ]);
 
@@ -37,7 +37,10 @@ async function load(gameId) {
   const permRes = await sb.rpc('has_room_perm', { p_room_id: game.room_id, p_perm: 'event' });
   const canManage = permRes.data === true;
 
-  const participants = (partRes.data || []).map((p) => p.user).filter(Boolean);
+  // 참여자 = 프로필 + games_played
+  const participants = (partRes.data || [])
+    .filter((r) => r.user)
+    .map((r) => ({ ...r.user, games_played: r.games_played }));
   const matches = matchRes.data || [];
   const statusMap = {};
   matches.forEach((m) => (m.players || []).forEach((pp) => { if (pp.user) statusMap[pp.user.id] = m.status; }));
@@ -50,12 +53,21 @@ async function load(gameId) {
 function statusLabel(uid) {
   const s = gctx.statusMap[uid];
   if (s === 'playing') return ' <span class="badge playing">게임중</span>';
-  if (s === 'waiting') return ' <span class="badge wait">참여 대기중</span>';
-  return '';
+  if (s === 'waiting') return ' <span class="badge wait">게임 대기</span>';
+  return ' <span class="badge idle">휴식</span>';
+}
+
+// 성별/구력/급수 한 줄
+function genderLabel(g) {
+  return g === 'male' ? '남' : g === 'female' ? '여' : '-';
+}
+function pInfo(u, withGames) {
+  const base = `${genderLabel(u.gender)} · 구력 ${expText(u.exp_start)} · ${gradeSummary(u.grade_region, u.grade_national)}`;
+  return withGames ? `${base} · 게임 ${u.games_played ?? 0}회` : base;
 }
 
 function playerNames(m) {
-  return (m.players || []).map((p) => `${esc(p.user?.name || '?')}${statusLabel(p.user?.id)}`).join(' · ');
+  return (m.players || []).map((p) => esc(p.user?.name || '?')).join(' · ');
 }
 
 function renderMain() {
@@ -113,8 +125,8 @@ function renderMain() {
       </div>
       <div class="attend-summary">
         <span class="as-play">게임중 ${playingCnt}</span>
-        <span class="as-wait">대기중 ${waitingCnt}</span>
-        <span class="as-idle">대기가능 ${idleCnt}</span>
+        <span class="as-wait">게임 대기 ${waitingCnt}</span>
+        <span class="as-idle">휴식 ${idleCnt}</span>
       </div>
     </section>
 
@@ -152,7 +164,10 @@ function attendeeRowsHTML() {
       (u) => `
       <div class="member-item">
         <div class="avatar sm">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : esc(initials(u.name))}</div>
-        <div class="m-meta"><div class="m-name">${esc(u.name)}${statusLabel(u.id)}</div></div>
+        <div class="m-meta">
+          <div class="m-name">${esc(u.name)}${statusLabel(u.id)}</div>
+          <div class="m-tags">${esc(pInfo(u, true))}</div>
+        </div>
         ${canManage && !statusMap[u.id] ? `<button class="mini-btn no" data-rm-part="${u.id}">제외</button>` : ''}
       </div>`
     )
@@ -170,8 +185,8 @@ function openStatusDrawer() {
       </div>
       <div class="drawer-legend">
         <span class="badge playing">게임중</span>
-        <span class="badge wait">참여 대기중</span>
-        <span class="badge idle">대기가능</span>
+        <span class="badge wait">게임 대기</span>
+        <span class="badge idle">휴식</span>
       </div>
       <div class="drawer-body"><div class="member-list" id="d-list"></div></div>
     </div>`;
@@ -197,18 +212,18 @@ async function openAddParticipant() {
   const { game, participants } = gctx;
   const { data } = await sb
     .from('room_members')
-    .select('user:profiles(id, name)')
+    .select('user:profiles(id, name, gender, exp_start, grade_region, grade_national)')
     .eq('room_id', game.room_id)
     .eq('status', 'approved');
   const taken = new Set(participants.map((p) => p.id));
   const candidates = (data || []).map((d) => d.user).filter((u) => u && !taken.has(u.id));
   const remain = game.max_players - participants.length;
 
-  if (!candidates.length) return toast('추가할 모임원이 없어요.', 'info');
+  if (!candidates.length) return toast('추가할 참석자가 없어요.', 'info');
 
   openChecklist({
     title: '참석자 추가',
-    items: candidates.map((u) => ({ value: u.id, label: u.name })),
+    items: candidates.map((u) => ({ value: u.id, label: u.name, sub: pInfo(u, false) })),
     max: remain,
     remainText: (n) => `남은 자리 ${n}`,
     confirmText: '추가',
@@ -231,7 +246,7 @@ function openAddWaiting() {
 
   openChecklist({
     title: '대기 등록',
-    items: available.map((u) => ({ value: u.id, label: u.name })),
+    items: available.map((u) => ({ value: u.id, label: u.name, sub: pInfo(u, true) })),
     max: 4,
     remainText: (n) => (n > 0 ? `${n}명 더 선택` : '4명 선택 완료'),
     confirmText: '대기 등록',
@@ -304,7 +319,17 @@ function openChecklist({ title, items, max, remainText, confirmText, onConfirm }
       <div class="modal-body">
         ${max != null ? `<div class="check-remain" id="cl-remain"></div>` : ''}
         <div class="checklist">
-          ${items.map((it) => `<label class="check-row"><input type="checkbox" value="${esc(it.value)}"/> <span>${esc(it.label)}</span></label>`).join('')}
+          ${items
+            .map(
+              (it) => `<label class="check-row">
+                <input type="checkbox" value="${esc(it.value)}"/>
+                <span class="cr-main">
+                  <span class="cr-name">${esc(it.label)}</span>
+                  ${it.sub ? `<span class="cr-sub">${esc(it.sub)}</span>` : ''}
+                </span>
+              </label>`
+            )
+            .join('')}
         </div>
         <button class="btn btn-primary" id="cl-confirm">${esc(confirmText)}</button>
       </div>

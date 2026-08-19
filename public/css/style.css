@@ -329,7 +329,10 @@ html, body {
 /* 체크리스트 / 코트 선택 모달 */
 .check-remain { font-size: 13.5px; font-weight: 800; color: var(--primary); margin-bottom: 10px; }
 .checklist { display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto; margin-bottom: 14px; }
-.check-row input:disabled + span { opacity: .4; }
+.check-row input:disabled + .cr-main { opacity: .4; }
+.check-row .cr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cr-name { font-weight: 600; font-size: 15px; }
+.cr-sub { font-size: 12px; color: var(--muted); }
 .check-row { display: flex; align-items: center; gap: 10px; padding: 12px 6px; border-bottom: 1px solid var(--line); font-size: 15px; cursor: pointer; }
 .check-row input { width: 18px; height: 18px; flex-shrink: 0; }
 .court-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }

@@ -22,6 +22,9 @@ alter table public.profiles add column if not exists grade_national text;
 alter table public.profiles drop column if exists grade;
 alter table public.profiles drop column if exists grade_scope;
 
+-- 성별 (male | female) — 남복/여복/혼복 구분용
+alter table public.profiles add column if not exists gender text;
+
 -- ---------- rooms : 배드민턴 방 ----------
 create table if not exists public.rooms (
   id           uuid primary key default gen_random_uuid(),
@@ -331,11 +334,13 @@ create policy games_delete on public.games
 --  모든 변경은 아래 SECURITY DEFINER 함수로만 (권한: has_room_perm 'event')
 -- ============================================================
 create table if not exists public.game_participants (
-  game_id  uuid not null references public.games(id) on delete cascade,
-  user_id  uuid not null references public.profiles(id) on delete cascade,
-  added_at timestamptz not null default now(),
+  game_id      uuid not null references public.games(id) on delete cascade,
+  user_id      uuid not null references public.profiles(id) on delete cascade,
+  games_played int not null default 0,               -- 완료한 게임 횟수
+  added_at     timestamptz not null default now(),
   primary key (game_id, user_id)
 );
+alter table public.game_participants add column if not exists games_played int not null default 0;
 alter table public.game_participants enable row level security;
 drop policy if exists gp_select on public.game_participants;
 create policy gp_select on public.game_participants for select to authenticated using (true);
@@ -433,14 +438,20 @@ begin
   update matches set status = 'playing', court = p_court where id = p_match_id;
 end; $$;
 
--- 매치 완료/취소(삭제)
+-- 매치 완료/취소(삭제). 게임중(playing)을 완료하면 참가자 게임 횟수 +1
 create or replace function public.complete_match(p_match_id uuid)
 returns void language plpgsql security definer set search_path = public as $$
-declare rid uuid;
+declare rid uuid; gid uuid; st text;
 begin
-  select g.room_id into rid from matches m join games g on g.id = m.game_id where m.id = p_match_id;
+  select g.room_id, m.game_id, m.status into rid, gid, st
+    from matches m join games g on g.id = m.game_id where m.id = p_match_id;
   if rid is null then raise exception 'no match'; end if;
   if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if st = 'playing' then
+    update game_participants gp set games_played = games_played + 1
+     where gp.game_id = gid
+       and gp.user_id in (select user_id from match_players where match_id = p_match_id);
+  end if;
   delete from matches where id = p_match_id;
 end; $$;
 
