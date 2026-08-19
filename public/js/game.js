@@ -207,8 +207,10 @@ async function openAddParticipant() {
   if (!candidates.length) return toast('추가할 모임원이 없어요.', 'info');
 
   openChecklist({
-    title: `참석자 추가 (남은 자리 ${remain})`,
+    title: '참석자 추가',
     items: candidates.map((u) => ({ value: u.id, label: u.name })),
+    max: remain,
+    remainText: (n) => `남은 자리 ${n}`,
     confirmText: '추가',
     onConfirm: async (ids) => {
       if (!ids.length) return toast('추가할 참석자를 선택하세요.', 'error');
@@ -228,9 +230,10 @@ function openAddWaiting() {
   if (available.length < 4) return toast('대기 등록에는 대기 가능한 참여자 4명이 필요해요.', 'error');
 
   openChecklist({
-    title: '대기 등록 (4명 선택)',
+    title: '대기 등록',
     items: available.map((u) => ({ value: u.id, label: u.name })),
     max: 4,
+    remainText: (n) => (n > 0 ? `${n}명 더 선택` : '4명 선택 완료'),
     confirmText: '대기 등록',
     onConfirm: async (ids) => {
       if (ids.length !== 4) return toast('정확히 4명을 선택하세요.', 'error');
@@ -291,13 +294,15 @@ async function completeMatch(matchId, verb) {
 }
 
 // ---------- 공용 체크리스트 모달 ----------
-function openChecklist({ title, items, max, confirmText, onConfirm }) {
+// max: 최대 선택 수(초과 선택 차단). remainText(n): 남은 수 표시 문구.
+function openChecklist({ title, items, max, remainText, confirmText, onConfirm }) {
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
     <div class="modal">
       <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="cl-close" aria-label="닫기">✕</button></div>
       <div class="modal-body">
+        ${max != null ? `<div class="check-remain" id="cl-remain"></div>` : ''}
         <div class="checklist">
           ${items.map((it) => `<label class="check-row"><input type="checkbox" value="${esc(it.value)}"/> <span>${esc(it.label)}</span></label>`).join('')}
         </div>
@@ -310,12 +315,17 @@ function openChecklist({ title, items, max, confirmText, onConfirm }) {
   modal.querySelector('#cl-close').addEventListener('click', close);
 
   const boxes = [...modal.querySelectorAll('input[type=checkbox]')];
-  if (max) {
-    modal.querySelector('.checklist').addEventListener('change', () => {
-      const checked = boxes.filter((b) => b.checked);
-      boxes.forEach((b) => { if (!b.checked) b.disabled = checked.length >= max; });
-    });
-  }
+  const remainEl = modal.querySelector('#cl-remain');
+  const update = () => {
+    if (max == null) return;
+    const checked = boxes.filter((b) => b.checked).length;
+    const left = max - checked;
+    boxes.forEach((b) => { if (!b.checked) b.disabled = checked >= max; }); // 0이면 나머지 선택 불가
+    if (remainEl) remainEl.textContent = remainText ? remainText(left) : `남은 선택 ${left}`;
+  };
+  modal.querySelector('.checklist').addEventListener('change', update);
+  update(); // 초기 표시
+
   modal.querySelector('#cl-confirm').addEventListener('click', async () => {
     const ids = boxes.filter((b) => b.checked).map((b) => b.value);
     await onConfirm(ids);
