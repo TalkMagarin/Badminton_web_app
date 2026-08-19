@@ -1,13 +1,13 @@
-// 방 상세: 참여자 실시간 목록 + 나가기/방장 종료 (MVP)
+// 모임 상세: 참여자 실시간 목록 + 나가기/방장 종료 (MVP)
 import { sb } from './supabase.js';
 import { store, go } from './app.js';
-import { esc, initials, expText, gradeSummary, fmtDateTime, toast } from './util.js';
+import { esc, initials, expText, gradeSummary, toast } from './util.js';
 
 export async function renderRoom(root, roomId) {
   root.innerHTML = `
     <header class="topbar">
       <button class="icon-btn" id="btn-back" aria-label="뒤로">←</button>
-      <div class="app-name">방 정보</div>
+      <div class="app-name">모임 정보</div>
       <div class="top-actions"></div>
     </header>
     <main class="room-detail">
@@ -32,7 +32,7 @@ async function load(roomId) {
   const main = document.querySelector('.room-detail');
   if (!main) return;
   if (error || !room) {
-    main.innerHTML = `<div class="empty">방을 찾을 수 없어요. (종료되었을 수 있습니다)</div>`;
+    main.innerHTML = `<div class="empty">모임을 찾을 수 없어요. (종료되었을 수 있습니다)</div>`;
     return;
   }
   currentRoom = room;
@@ -49,10 +49,8 @@ async function load(roomId) {
 
   main.innerHTML = `
     <section class="card room-head-card">
-      <h2 class="rh-title">${esc(room.title)}</h2>
+      <h2 class="rh-title">${esc(room.title)}${room.is_private ? ' <span class="badge private">비공개</span>' : ''}</h2>
       <div class="rh-meta">
-        ${room.location ? `<div>📍 ${esc(room.location)}</div>` : ''}
-        ${room.play_at ? `<div>🕒 ${fmtDateTime(room.play_at)}</div>` : ''}
         <div>👤 방장 ${esc(room.host?.name || '알 수 없음')}</div>
         <div>👥 ${list.length}/${room.max_members}명</div>
       </div>
@@ -80,8 +78,8 @@ async function load(roomId) {
     <div class="room-actions">
       ${
         isHost
-          ? `<button class="btn btn-danger" id="btn-close-room">방 종료</button>`
-          : `<button class="btn btn-outline" id="btn-leave">방 나가기</button>`
+          ? `<button class="btn btn-danger" id="btn-close-room">모임 종료</button>`
+          : `<button class="btn btn-outline" id="btn-leave">모임 나가기</button>`
       }
     </div>
   `;
@@ -99,18 +97,18 @@ async function onLeave(roomId) {
     console.error(error);
     return toast('나가기에 실패했습니다.', 'error');
   }
-  toast('방에서 나왔어요.', 'info');
+  toast('모임에서 나왔어요.', 'info');
   go('lobby');
 }
 
 async function onCloseRoom(roomId) {
-  if (!confirm('방을 종료할까요? 참여자 정보가 사라집니다.')) return;
+  if (!confirm('모임을 종료할까요? 참여자 정보가 사라집니다.')) return;
   const { error } = await sb.from('rooms').delete().eq('id', roomId);
   if (error) {
     console.error(error);
     return toast('종료에 실패했습니다.', 'error');
   }
-  toast('방을 종료했어요.', 'info');
+  toast('모임을 종료했어요.', 'info');
   go('lobby');
 }
 
@@ -126,7 +124,7 @@ function subscribe(roomId) {
       'postgres_changes',
       { event: 'DELETE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
       () => {
-        toast('방장이 방을 종료했어요.', 'info');
+        toast('방장이 모임을 종료했어요.', 'info');
         go('lobby');
       }
     )

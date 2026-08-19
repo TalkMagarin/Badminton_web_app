@@ -25,16 +25,20 @@ alter table public.profiles drop column if exists grade_scope;
 -- ---------- rooms : 배드민턴 방 ----------
 create table if not exists public.rooms (
   id           uuid primary key default gen_random_uuid(),
-  title        text not null,
+  title        text not null,                         -- 모임명
   host_id      uuid not null references public.profiles(id) on delete cascade,
   status       text not null default 'open',         -- open | playing | closed
-  location     text,
-  play_at      timestamptz,
-  max_members  int not null default 4,
+  location     text,                                  -- (미사용, 하위호환)
+  play_at      timestamptz,                           -- (미사용, 하위호환)
+  max_members  int not null default 4,                -- 정원(직접 입력)
+  is_private   boolean not null default false,        -- 공개(false) / 비공개(true)
   grade_min    text,
   grade_max    text,
   created_at   timestamptz not null default now()
 );
+
+-- 공개/비공개 설정 컬럼 (기존 테이블 마이그레이션)
+alter table public.rooms add column if not exists is_private boolean not null default false;
 
 -- ---------- room_members : 방 참여자 ----------
 create table if not exists public.room_members (

@@ -2,8 +2,7 @@
 import { sb } from './supabase.js';
 import { store, go, clearChannels } from './app.js';
 import {
-  GRADES, expText, gradeSummary, gradeLabel, esc, initials,
-  fmtDateTime, toast, h,
+  GRADES, expText, gradeSummary, gradeLabel, esc, initials, toast, h,
 } from './util.js';
 
 let searchText = '';
@@ -38,18 +37,18 @@ export function renderLobby(root) {
         </div>
         <div class="stat">
           <div class="stat-num" id="stat-rooms">–</div>
-          <div class="stat-label">열린 방</div>
+          <div class="stat-label">열린 모임</div>
         </div>
         <button class="stat stat-cta" id="btn-create">
           <div class="stat-num">＋</div>
-          <div class="stat-label">방 만들기</div>
+          <div class="stat-label">모임 만들기</div>
         </button>
       </section>
 
       <section class="rooms-section">
         <div class="section-head">
-          <h2>방 찾기</h2>
-          <input class="search" id="room-search" placeholder="방 제목·장소 검색" />
+          <h2>모임 찾기</h2>
+          <input class="search" id="room-search" placeholder="모임명 검색" />
         </div>
         <div class="room-list" id="room-list">
           <div class="empty">불러오는 중…</div>
@@ -98,20 +97,20 @@ function memberCount(room) {
 function paintRooms() {
   const list = document.getElementById('room-list');
   if (!list) return;
+  const myId = store.session?.user?.id;
   const openCount = roomsCache.length;
   const statRooms = document.getElementById('stat-rooms');
   if (statRooms) statRooms.textContent = openCount;
 
   const rows = roomsCache.filter((r) => {
+    // 비공개 모임은 본인이 방장인 경우에만 목록에 노출
+    if (r.is_private && r.host_id !== myId) return false;
     if (!searchText) return true;
-    return (
-      (r.title || '').toLowerCase().includes(searchText) ||
-      (r.location || '').toLowerCase().includes(searchText)
-    );
+    return (r.title || '').toLowerCase().includes(searchText);
   });
 
   if (!rows.length) {
-    list.innerHTML = `<div class="empty">${openCount ? '검색 결과가 없어요.' : '아직 열린 방이 없어요. 첫 방을 만들어 보세요!'}</div>`;
+    list.innerHTML = `<div class="empty">${openCount ? '검색 결과가 없어요.' : '아직 열린 모임이 없어요. 첫 모임을 만들어 보세요!'}</div>`;
     return;
   }
 
@@ -123,17 +122,15 @@ function paintRooms() {
         r.grade_min || r.grade_max
           ? `${gradeLabel(r.grade_min || r.grade_max)}${r.grade_min && r.grade_max && r.grade_min !== r.grade_max ? `~${gradeLabel(r.grade_max)}` : ''}`
           : '';
-      const statusBadge =
-        r.status === 'playing' ? `<span class="badge playing">경기중</span>` : '';
+      const badges =
+        (r.status === 'playing' ? `<span class="badge playing">경기중</span>` : '') +
+        (r.is_private ? `<span class="badge private">비공개</span>` : '');
+      const sub = gradeRange ? `<div class="room-sub"><span>🏅 ${esc(gradeRange)}</span></div>` : '';
       return `
         <button class="room-item${full ? ' full' : ''}" data-id="${r.id}">
           <div class="room-main">
-            <div class="room-title">${esc(r.title)} ${statusBadge}</div>
-            <div class="room-sub">
-              ${r.location ? `<span>📍 ${esc(r.location)}</span>` : ''}
-              ${r.play_at ? `<span>🕒 ${fmtDateTime(r.play_at)}</span>` : ''}
-              ${gradeRange ? `<span>🏅 ${esc(gradeRange)}</span>` : ''}
-            </div>
+            <div class="room-title">${esc(r.title)} ${badges}</div>
+            ${sub}
             <div class="room-host">방장 ${esc(r.host?.name || '알 수 없음')}</div>
           </div>
           <div class="room-count ${full ? 'is-full' : ''}">
@@ -170,46 +167,43 @@ async function onJoin(roomId) {
   go('room', { roomId });
 }
 
-// ---------- 방 생성 모달 ----------
+// ---------- 모임 생성 모달 ----------
 function openCreateModal() {
-  const gradeOpts = (sel) =>
+  const gradeOpts = () =>
     `<option value="">무관</option>` +
-    GRADES.map((g) => `<option value="${g.code}"${g.code === sel ? ' selected' : ''}>${g.label}</option>`).join('');
+    GRADES.map((g) => `<option value="${g.code}">${g.label}</option>`).join('');
 
   const modal = h('div', { class: 'modal-overlay' });
   modal.innerHTML = `
     <div class="modal">
       <div class="modal-head">
-        <h3>방 만들기</h3>
+        <h3>모임 만들기</h3>
         <button class="icon-btn" id="m-close" aria-label="닫기">✕</button>
       </div>
       <form id="create-form" class="modal-body">
-        <label class="field"><span>제목</span>
-          <input name="title" placeholder="예) 오늘 저녁 복식 구합니다" required maxlength="40" />
-        </label>
-        <label class="field"><span>장소</span>
-          <input name="location" placeholder="예) OO체육관 A코트" maxlength="40" />
-        </label>
-        <label class="field"><span>일시</span>
-          <input name="play_at" type="datetime-local" />
+        <label class="field"><span>모임명</span>
+          <input name="title" placeholder="예) 오늘 저녁 복식 모임" required maxlength="40" />
         </label>
         <div class="field-row">
-          <label class="field"><span>정원</span>
-            <select name="max_members">
-              <option value="2">2명</option>
-              <option value="4" selected>4명</option>
-              <option value="6">6명</option>
-              <option value="8">8명</option>
-            </select>
-          </label>
           <label class="field"><span>급수 하한</span>
-            <select name="grade_min">${gradeOpts('')}</select>
+            <select name="grade_min">${gradeOpts()}</select>
           </label>
           <label class="field"><span>급수 상한</span>
-            <select name="grade_max">${gradeOpts('')}</select>
+            <select name="grade_max">${gradeOpts()}</select>
           </label>
         </div>
-        <button type="submit" class="btn btn-primary">방 만들기</button>
+        <label class="field"><span>정원 (명)</span>
+          <input name="max_members" type="number" inputmode="numeric" min="2" max="99" value="4" required />
+        </label>
+        <div class="field"><span>공개 설정</span>
+          <div class="segmented" id="seg-visibility">
+            <button type="button" class="seg-btn active" data-v="false">공개</button>
+            <button type="button" class="seg-btn" data-v="true">비공개</button>
+          </div>
+          <input type="hidden" name="is_private" value="false" />
+          <small class="hint" id="vis-hint">누구나 모임 찾기에서 볼 수 있어요</small>
+        </div>
+        <button type="submit" class="btn btn-primary">모임 만들기</button>
       </form>
     </div>
   `;
@@ -219,6 +213,20 @@ function openCreateModal() {
     if (e.target === modal) close();
   });
   modal.querySelector('#m-close').addEventListener('click', close);
+
+  // 공개/비공개 세그먼트
+  const seg = modal.querySelector('#seg-visibility');
+  const hidden = modal.querySelector('input[name=is_private]');
+  const visHint = modal.querySelector('#vis-hint');
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('.seg-btn');
+    if (!b) return;
+    seg.querySelectorAll('.seg-btn').forEach((x) => x.classList.toggle('active', x === b));
+    hidden.value = b.dataset.v;
+    visHint.textContent =
+      b.dataset.v === 'true' ? '나만 볼 수 있어요 (모임 찾기에서 숨김)' : '누구나 모임 찾기에서 볼 수 있어요';
+  });
+
   modal.querySelector('#create-form').addEventListener('submit', (e) => onCreate(e, close));
 }
 
@@ -227,11 +235,9 @@ async function onCreate(e, close) {
   const btn = e.target.querySelector('button[type=submit]');
   const fd = new FormData(e.target);
   const title = String(fd.get('title') || '').trim();
-  if (!title) return toast('제목을 입력하세요.', 'error');
-  const location = String(fd.get('location') || '').trim() || null;
-  const playRaw = String(fd.get('play_at') || '');
-  const play_at = playRaw ? new Date(playRaw).toISOString() : null;
-  const max_members = Number(fd.get('max_members')) || 4;
+  if (!title) return toast('모임명을 입력하세요.', 'error');
+  const max_members = Math.max(2, Math.min(99, Number(fd.get('max_members')) || 4));
+  const is_private = fd.get('is_private') === 'true';
   const grade_min = String(fd.get('grade_min') || '') || null;
   const grade_max = String(fd.get('grade_max') || '') || null;
 
@@ -241,9 +247,8 @@ async function onCreate(e, close) {
     .from('rooms')
     .insert({
       title,
-      location,
-      play_at,
       max_members,
+      is_private,
       grade_min,
       grade_max,
       host_id: store.session.user.id,
@@ -251,13 +256,13 @@ async function onCreate(e, close) {
     .select('id')
     .single();
   btn.disabled = false;
-  btn.textContent = '방 만들기';
+  btn.textContent = '모임 만들기';
   if (error) {
     console.error(error);
-    return toast('방 생성에 실패했습니다.', 'error');
+    return toast('모임 생성에 실패했습니다.', 'error');
   }
   close();
-  toast('방을 만들었어요!', 'success');
+  toast('모임을 만들었어요!', 'success');
   go('room', { roomId: data.id }); // 방장은 트리거로 자동 참여됨
 }
 
