@@ -126,7 +126,8 @@ create trigger trg_add_host_as_member
 -- ============================================================
 --  비공개 모임 암호 (해시로 저장, 클라이언트는 절대 읽지 못함)
 -- ============================================================
-create extension if not exists pgcrypto;
+-- pgcrypto (crypt/gen_salt) — Supabase 는 보통 extensions 스키마에 설치됨
+create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.room_passwords (
   room_id uuid primary key references public.rooms(id) on delete cascade,
@@ -137,8 +138,9 @@ create table if not exists public.room_passwords (
 alter table public.room_passwords enable row level security;
 
 -- 방장이 비공개 모임 암호를 설정 (모임 생성 직후 호출)
+-- search_path 에 extensions 포함 → gen_salt/crypt 를 찾을 수 있게 함
 create or replace function public.set_room_password(p_room_id uuid, p_password text)
-returns void language plpgsql security definer set search_path = public as $$
+returns void language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not exists (select 1 from rooms where id = p_room_id and host_id = auth.uid()) then
     raise exception 'not host';
@@ -154,7 +156,7 @@ $$;
 
 -- 암호 확인 후 참여 (일치 시 참여자 등록하고 true, 아니면 false)
 create or replace function public.join_room_with_password(p_room_id uuid, p_password text)
-returns boolean language plpgsql security definer set search_path = public as $$
+returns boolean language plpgsql security definer set search_path = public, extensions as $$
 declare ok boolean;
 begin
   select (pw_hash = crypt(p_password, pw_hash)) into ok
@@ -171,6 +173,9 @@ $$;
 
 grant execute on function public.set_room_password(uuid, text) to authenticated;
 grant execute on function public.join_room_with_password(uuid, text) to authenticated;
+
+-- PostgREST 스키마 캐시 새로고침(새 함수 인식)
+notify pgrst, 'reload schema';
 
 -- ============================================================
 --  Realtime : 변경 사항을 클라이언트로 브로드캐스트할 테이블 등록
