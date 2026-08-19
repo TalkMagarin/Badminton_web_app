@@ -87,12 +87,16 @@ async function boot() {
 
   const { data } = await sb.auth.getSession();
   store.session = data.session;
+  let lastRoutedUser = data.session?.user?.id || null;
 
-  // 인증 상태 변화 → 자동 라우팅
+  // 인증 상태 변화 → 라우팅. 단, 사용자가 바뀔 때(로그인/로그아웃)만 이동.
+  // 토큰 자동 갱신·탭 복귀 등 같은 사용자 이벤트에서는 현재 화면을 유지한다.
   sb.auth.onAuthStateChange((_event, session) => {
     store.session = session;
-    if (store.suppressRoute) return; // 회원가입 중이면 해당 핸들러가 직접 라우팅
-    routeBySession();
+    const uid = session?.user?.id || null;
+    if (store.suppressRoute) { lastRoutedUser = uid; return; } // 회원가입 중엔 해당 핸들러가 직접 라우팅
+    if (!uid) { lastRoutedUser = null; go('auth'); return; }   // 로그아웃
+    if (uid !== lastRoutedUser) { lastRoutedUser = uid; routeBySession(); } // 새 로그인만 로비로
   });
 
   await routeBySession();
