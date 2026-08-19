@@ -64,16 +64,9 @@ function renderMain() {
   const playing = matches.filter((m) => m.status === 'playing');
   const main = rootEl.querySelector('.room-detail');
 
-  const partItems = participants
-    .map(
-      (u) => `
-      <div class="member-item">
-        <div class="avatar sm">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : esc(initials(u.name))}</div>
-        <div class="m-meta"><div class="m-name">${esc(u.name)}${statusLabel(u.id)}</div></div>
-        ${canManage && !gctx.statusMap[u.id] ? `<button class="mini-btn no" data-rm-part="${u.id}">제외</button>` : ''}
-      </div>`
-    )
-    .join('');
+  const playingCnt = participants.filter((u) => gctx.statusMap[u.id] === 'playing').length;
+  const waitingCnt = participants.filter((u) => gctx.statusMap[u.id] === 'waiting').length;
+  const idleCnt = participants.length - playingCnt - waitingCnt;
 
   const waitCards = waiting
     .map(
@@ -112,10 +105,17 @@ function renderMain() {
 
     <section class="rooms-section">
       <div class="section-head">
-        <h2>모임원 (${participants.length}/${game.max_players})</h2>
-        ${canManage ? `<button class="mini-btn ok" id="btn-add-part">＋ 추가</button>` : ''}
+        <h2>참석자 (${participants.length}/${game.max_players})</h2>
+        <div class="head-actions">
+          <button class="mini-btn ghost" id="btn-status">현황</button>
+          ${canManage ? `<button class="mini-btn ok" id="btn-add-part">＋ 추가</button>` : ''}
+        </div>
       </div>
-      <div class="member-list">${partItems || '<div class="empty">참여자를 추가해 주세요.</div>'}</div>
+      <div class="attend-summary">
+        <span class="as-play">게임중 ${playingCnt}</span>
+        <span class="as-wait">대기중 ${waitingCnt}</span>
+        <span class="as-idle">대기가능 ${idleCnt}</span>
+      </div>
     </section>
 
     <section class="rooms-section">
@@ -132,17 +132,67 @@ function renderMain() {
     </section>
   `;
 
+  const statusBtn = main.querySelector('#btn-status');
+  if (statusBtn) statusBtn.addEventListener('click', openStatusDrawer);
   const addPart = main.querySelector('#btn-add-part');
   if (addPart) addPart.addEventListener('click', openAddParticipant);
   const addWait = main.querySelector('#btn-add-wait');
   if (addWait) addWait.addEventListener('click', openAddWaiting);
-  main.querySelectorAll('[data-rm-part]').forEach((b) => b.addEventListener('click', () => removeParticipant(b.dataset.rmPart)));
   main.querySelectorAll('[data-assign]').forEach((b) => b.addEventListener('click', () => openCourtPicker(b.dataset.assign)));
   main.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => completeMatch(b.dataset.cancel, '취소')));
   main.querySelectorAll('[data-complete]').forEach((b) => b.addEventListener('click', () => completeMatch(b.dataset.complete, '완료')));
 }
 
-// ---------- 모임원 추가 ----------
+// ---------- 참석자 현황 사이드바 ----------
+function attendeeRowsHTML() {
+  const { participants, canManage, statusMap } = gctx;
+  if (!participants.length) return '<div class="empty">참석자를 추가해 주세요.</div>';
+  return participants
+    .map(
+      (u) => `
+      <div class="member-item">
+        <div class="avatar sm">${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : esc(initials(u.name))}</div>
+        <div class="m-meta"><div class="m-name">${esc(u.name)}${statusLabel(u.id)}</div></div>
+        ${canManage && !statusMap[u.id] ? `<button class="mini-btn no" data-rm-part="${u.id}">제외</button>` : ''}
+      </div>`
+    )
+    .join('');
+}
+
+function openStatusDrawer() {
+  const overlay = document.createElement('div');
+  overlay.className = 'drawer-overlay';
+  overlay.innerHTML = `
+    <div class="drawer">
+      <div class="drawer-head">
+        <h3>참석자 현황</h3>
+        <button class="icon-btn" id="d-close" aria-label="닫기">✕</button>
+      </div>
+      <div class="drawer-legend">
+        <span class="badge playing">게임중</span>
+        <span class="badge wait">참여 대기중</span>
+        <span class="badge idle">대기가능</span>
+      </div>
+      <div class="drawer-body"><div class="member-list" id="d-list"></div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#d-close').addEventListener('click', close);
+  const listEl = overlay.querySelector('#d-list');
+  const fill = () => {
+    listEl.innerHTML = attendeeRowsHTML();
+    listEl.querySelectorAll('[data-rm-part]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        await removeParticipant(b.dataset.rmPart);
+        fill();
+      })
+    );
+  };
+  fill();
+}
+
+// ---------- 참석자 추가 ----------
 async function openAddParticipant() {
   const { game, participants } = gctx;
   const { data } = await sb
@@ -157,11 +207,11 @@ async function openAddParticipant() {
   if (!candidates.length) return toast('추가할 모임원이 없어요.', 'info');
 
   openChecklist({
-    title: `모임원 추가 (남은 자리 ${remain})`,
+    title: `참석자 추가 (남은 자리 ${remain})`,
     items: candidates.map((u) => ({ value: u.id, label: u.name })),
     confirmText: '추가',
     onConfirm: async (ids) => {
-      if (!ids.length) return toast('추가할 모임원을 선택하세요.', 'error');
+      if (!ids.length) return toast('추가할 참석자를 선택하세요.', 'error');
       if (ids.length > remain) return toast(`정원이 ${remain}명 남았어요.`, 'error');
       for (const uid of ids) {
         const { error } = await sb.rpc('add_game_participant', { p_game_id: game.id, p_user: uid });
@@ -229,7 +279,7 @@ function openCourtPicker(matchId) {
 async function removeParticipant(userId) {
   const { error } = await sb.rpc('remove_game_participant', { p_game_id: gctx.gameId, p_user: userId });
   if (error) { console.error(error); return toast('제외에 실패했습니다.', 'error'); }
-  load(gctx.gameId);
+  await load(gctx.gameId);
 }
 
 async function completeMatch(matchId, verb) {
