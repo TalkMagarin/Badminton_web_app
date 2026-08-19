@@ -296,6 +296,34 @@ grant execute on function public.set_member_role(uuid, uuid, text, boolean, bool
 grant execute on function public.transfer_ownership(uuid, uuid) to authenticated;
 grant execute on function public.delete_empty_room(uuid) to authenticated;
 
+-- ============================================================
+--  프로필 사진 저장소 (Supabase Storage 'avatars' 버킷)
+-- ============================================================
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do nothing;
+
+-- 누구나 읽기(공개 버킷), 본인 폴더(<uid>/...)에만 업로드/수정/삭제
+drop policy if exists "avatars read"   on storage.objects;
+drop policy if exists "avatars insert" on storage.objects;
+drop policy if exists "avatars update" on storage.objects;
+drop policy if exists "avatars delete" on storage.objects;
+
+create policy "avatars read" on storage.objects
+  for select to public using (bucket_id = 'avatars');
+
+create policy "avatars insert" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "avatars update" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "avatars delete" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
 -- PostgREST 스키마 캐시 새로고침(새 함수 인식)
 notify pgrst, 'reload schema';
 

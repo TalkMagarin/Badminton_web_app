@@ -1,7 +1,7 @@
 // 앱 진입점: 세션 감지 → 화면 라우팅(auth ↔ lobby ↔ room)
 import { sb, CONFIG_OK } from './supabase.js';
 import { renderAuth } from './auth.js';
-import { renderLobby } from './lobby.js';
+import { renderLobby, renderFind, renderMyRooms } from './lobby.js';
 import { renderRoom } from './room.js';
 import { toast } from './util.js';
 
@@ -35,6 +35,8 @@ export function go(screen, params = {}) {
   root.innerHTML = '';
   if (screen === 'auth') renderAuth(root);
   else if (screen === 'lobby') renderLobby(root);
+  else if (screen === 'find') renderFind(root);
+  else if (screen === 'myrooms') renderMyRooms(root);
   else if (screen === 'room') renderRoom(root, params.roomId);
 }
 

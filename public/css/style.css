@@ -224,6 +224,28 @@ html, body {
   border-radius: 12px; padding: 9px 12px; font-size: 13.5px; outline: none;
 }
 .search:focus { border-color: var(--primary); }
+.search.wide { max-width: none; width: 100%; }
+
+/* ---------- 로비 메뉴 카드 ---------- */
+.menu-list { display: flex; flex-direction: column; gap: 12px; }
+.menu-card {
+  width: 100%; border: 0; cursor: pointer; text-align: left;
+  background: var(--card); border-radius: 18px; padding: 18px;
+  display: flex; align-items: center; gap: 14px; box-shadow: var(--shadow-sm);
+}
+.menu-card:active { transform: translateY(1px); }
+.menu-ic {
+  width: 46px; height: 46px; border-radius: 14px; background: #efeaff;
+  display: grid; place-items: center; font-size: 22px; flex-shrink: 0;
+}
+.menu-tx { flex: 1; min-width: 0; }
+.menu-title { font-size: 16px; font-weight: 800; }
+.menu-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.menu-arrow { color: var(--muted); font-size: 22px; line-height: 1; }
+
+/* 프로필 사진 편집 */
+.avatar-edit { display: flex; align-items: center; gap: 14px; }
+.avatar-edit .avatar { background: var(--grad); }
 
 .room-list { display: flex; flex-direction: column; gap: 10px; }
 .room-item {
