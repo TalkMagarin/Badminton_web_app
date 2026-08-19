@@ -6,6 +6,10 @@ import { esc, initials, fmtDateTime, expText, gradeSummary, toast } from './util
 let rootEl = null;
 let gctx = null; // { gameId, game, participants, matches, canManage, statusMap }
 
+const PC_BREAK = 900;   // 이 폭 이상이면 PC(코트 보드) 레이아웃
+let isPCMode = false;
+let onResize = null;
+
 export async function renderGame(root, gameId) {
   rootEl = root;
   root.innerHTML = `
@@ -16,7 +20,20 @@ export async function renderGame(root, gameId) {
     </header>
     <main class="room-detail"><div class="empty">불러오는 중…</div></main>
   `;
-  root.querySelector('#btn-back').addEventListener('click', () => history.length ? go('lobby') : go('lobby'));
+  root.querySelector('#btn-back').addEventListener('click', () => go('lobby'));
+
+  // 폭이 PC↔모바일 경계를 넘으면 다시 렌더
+  if (onResize) window.removeEventListener('resize', onResize);
+  let t;
+  onResize = () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      if (!gctx || !document.querySelector('.game-page')) { window.removeEventListener('resize', onResize); return; }
+      if (window.innerWidth >= PC_BREAK !== isPCMode) renderMain();
+    }, 180);
+  };
+  window.addEventListener('resize', onResize);
+
   await load(gameId);
   subscribe(gameId);
 }
@@ -85,84 +102,144 @@ function matchTypeBadge(m) {
   return t ? `<span class="type-badge ${t.cls}">${t.label}</span>` : '';
 }
 
-function renderMain() {
-  const { game, participants, matches, canManage } = gctx;
-  const waiting = matches.filter((m) => m.status === 'waiting');
-  const playing = matches.filter((m) => m.status === 'playing');
-  const main = rootEl.querySelector('.room-detail');
-
-  const playingCnt = participants.filter((u) => gctx.statusMap[u.id] === 'playing').length;
-  const waitingCnt = participants.filter((u) => gctx.statusMap[u.id] === 'waiting').length;
-  const idleCnt = participants.length - playingCnt - waitingCnt;
-
-  const waitCards = waiting
-    .map(
-      (m) => `
-      <div class="match-card">
-        <div class="match-info">
-          ${matchTypeBadge(m)}
-          <div class="match-players">${playerNames(m)}</div>
-        </div>
-        ${canManage ? `<div class="match-actions">
-          <button class="mini-btn ok" data-assign="${m.id}">코트 지정</button>
-          <button class="mini-btn no" data-cancel="${m.id}">취소</button>
-        </div>` : ''}
-      </div>`
-    )
-    .join('');
-
-  const playCards = playing
-    .map(
-      (m) => `
-      <div class="match-card playing">
-        <div class="match-info">
-          <span class="court-tag">코트 ${m.court}</span>
-          ${matchTypeBadge(m)}
-          <div class="match-players">${playerNames(m)}</div>
-        </div>
-        ${canManage ? `<button class="mini-btn done" data-complete="${m.id}">완료</button>` : ''}
-      </div>`
-    )
-    .join('');
-
-  main.innerHTML = `
+function infoCardHTML() {
+  const { game } = gctx;
+  return `
     <section class="card room-head-card">
       <h2 class="rh-title">🗓️ ${fmtDateTime(game.play_at)}</h2>
       <div class="rh-meta">
         ${game.location ? `<div>📍 ${esc(game.location)}</div>` : ''}
         <div>🏸 코트 ${game.courts}면 · 정원 ${game.max_players}명</div>
       </div>
-    </section>
+    </section>`;
+}
 
-    <section class="rooms-section">
-      <div class="section-head">
-        <h2>참석자 (${participants.length}/${game.max_players})</h2>
-        <div class="head-actions">
-          <button class="mini-btn ghost" id="btn-status">현황</button>
-          ${canManage ? `<button class="mini-btn ok" id="btn-add-part">＋ 추가</button>` : ''}
+function summaryHTML() {
+  const { participants, statusMap } = gctx;
+  const p = participants.filter((u) => statusMap[u.id] === 'playing').length;
+  const w = participants.filter((u) => statusMap[u.id] === 'waiting').length;
+  const i = participants.length - p - w;
+  return `<div class="attend-summary">
+    <span class="as-play">게임중 ${p}</span>
+    <span class="as-wait">게임 대기 ${w}</span>
+    <span class="as-idle">휴식 ${i}</span>
+  </div>`;
+}
+
+function waitCardHTML(m) {
+  const { canManage } = gctx;
+  return `
+    <div class="match-card">
+      <div class="match-info">${matchTypeBadge(m)}<div class="match-players">${playerNames(m)}</div></div>
+      ${canManage ? `<div class="match-actions">
+        <button class="mini-btn ok" data-assign="${m.id}">코트 지정</button>
+        <button class="mini-btn no" data-cancel="${m.id}">취소</button>
+      </div>` : ''}
+    </div>`;
+}
+
+function playCardHTML(m) {
+  const { canManage } = gctx;
+  return `
+    <div class="match-card playing">
+      <div class="match-info">
+        <span class="court-tag">코트 ${m.court}</span>${matchTypeBadge(m)}
+        <div class="match-players">${playerNames(m)}</div>
+      </div>
+      ${canManage ? `<button class="mini-btn done" data-complete="${m.id}">완료</button>` : ''}
+    </div>`;
+}
+
+// PC 코트 보드: 모든 코트(1..courts)를 카드로. 진행중이면 매치, 아니면 빈 코트.
+function courtBoardHTML() {
+  const { game, matches, canManage } = gctx;
+  const byCourt = {};
+  matches.filter((m) => m.status === 'playing').forEach((m) => (byCourt[m.court] = m));
+  let out = '';
+  for (let c = 1; c <= game.courts; c++) {
+    const m = byCourt[c];
+    out += m
+      ? `<div class="court-card busy">
+           <div class="court-num">코트 ${c}</div>
+           <div class="court-body">${matchTypeBadge(m)}<div class="match-players">${playerNames(m)}</div></div>
+           ${canManage ? `<button class="mini-btn done" data-complete="${m.id}">완료</button>` : ''}
+         </div>`
+      : `<div class="court-card empty">
+           <div class="court-num">코트 ${c}</div>
+           <div class="court-empty">빈 코트</div>
+         </div>`;
+  }
+  return out;
+}
+
+function renderMain() {
+  const { game, participants, matches, canManage } = gctx;
+  const waiting = matches.filter((m) => m.status === 'waiting');
+  const playing = matches.filter((m) => m.status === 'playing');
+  const main = rootEl.querySelector('.room-detail');
+
+  isPCMode = window.innerWidth >= PC_BREAK;
+  rootEl.classList.toggle('pc-game', isPCMode);
+
+  const waitList = waiting.length
+    ? `<div class="match-list">${waiting.map(waitCardHTML).join('')}</div>`
+    : '<div class="empty">대기 중인 게임이 없어요.</div>';
+  const addBtns = canManage
+    ? `<button class="mini-btn ok" id="btn-add-part">＋ 참석자</button><button class="mini-btn ok" id="btn-add-wait">＋ 대기 등록</button>`
+    : '';
+
+  if (isPCMode) {
+    // ---- PC: 코트 보드 중심 ----
+    main.innerHTML = `
+      <div class="game-page pc">
+        ${infoCardHTML()}
+        <div class="game-layout">
+          <div class="board-col">
+            <div class="section-head">
+              <h2>코트 (${game.courts})</h2>
+              <div class="head-actions">${addBtns}</div>
+            </div>
+            <div class="court-board">${courtBoardHTML()}</div>
+            <div class="section-head"><h2>대기 (${waiting.length})</h2></div>
+            ${waitList}
+          </div>
+          <aside class="side-col">
+            <div class="section-head"><h2>참석자 (${participants.length}/${game.max_players})</h2></div>
+            ${summaryHTML()}
+            <div class="member-list side-list">${attendeeRowsHTML()}</div>
+          </aside>
         </div>
-      </div>
-      <div class="attend-summary">
-        <span class="as-play">게임중 ${playingCnt}</span>
-        <span class="as-wait">게임 대기 ${waitingCnt}</span>
-        <span class="as-idle">휴식 ${idleCnt}</span>
-      </div>
-    </section>
+      </div>`;
+  } else {
+    // ---- 모바일: 세로 1열 ----
+    main.innerHTML = `
+      <div class="game-page">
+        ${infoCardHTML()}
+        <section class="rooms-section">
+          <div class="section-head">
+            <h2>참석자 (${participants.length}/${game.max_players})</h2>
+            <div class="head-actions">
+              <button class="mini-btn ghost" id="btn-status">현황</button>
+              ${canManage ? `<button class="mini-btn ok" id="btn-add-part">＋ 추가</button>` : ''}
+            </div>
+          </div>
+          ${summaryHTML()}
+        </section>
+        <section class="rooms-section">
+          <div class="section-head">
+            <h2>대기 (${waiting.length})</h2>
+            ${canManage ? `<button class="mini-btn ok" id="btn-add-wait">＋ 대기 등록</button>` : ''}
+          </div>
+          ${waitList}
+        </section>
+        <section class="rooms-section">
+          <div class="section-head"><h2>게임중 (${playing.length})</h2></div>
+          ${playing.length ? `<div class="match-list">${playing.map(playCardHTML).join('')}</div>` : '<div class="empty">진행 중인 게임이 없어요.</div>'}
+        </section>
+      </div>`;
+  }
 
-    <section class="rooms-section">
-      <div class="section-head">
-        <h2>대기 (${waiting.length})</h2>
-        ${canManage ? `<button class="mini-btn ok" id="btn-add-wait">＋ 대기 등록</button>` : ''}
-      </div>
-      ${waiting.length ? `<div class="match-list">${waitCards}</div>` : '<div class="empty">대기 중인 게임이 없어요.</div>'}
-    </section>
-
-    <section class="rooms-section">
-      <div class="section-head"><h2>게임중 (${playing.length})</h2></div>
-      ${playing.length ? `<div class="match-list">${playCards}</div>` : '<div class="empty">진행 중인 게임이 없어요.</div>'}
-    </section>
-  `;
-
+  // 이벤트 바인딩 (모바일/PC 공통)
   const statusBtn = main.querySelector('#btn-status');
   if (statusBtn) statusBtn.addEventListener('click', openStatusDrawer);
   const addPart = main.querySelector('#btn-add-part');
@@ -172,6 +249,7 @@ function renderMain() {
   main.querySelectorAll('[data-assign]').forEach((b) => b.addEventListener('click', () => openCourtPicker(b.dataset.assign)));
   main.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => completeMatch(b.dataset.cancel, '취소')));
   main.querySelectorAll('[data-complete]').forEach((b) => b.addEventListener('click', () => completeMatch(b.dataset.complete, '완료')));
+  main.querySelectorAll('[data-rm-part]').forEach((b) => b.addEventListener('click', () => removeParticipant(b.dataset.rmPart)));
 }
 
 // ---------- 참석자 현황 사이드바 ----------

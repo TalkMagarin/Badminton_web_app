@@ -33,6 +33,7 @@ export function el() {
 // 화면 전환 (모듈들이 호출)
 export function go(screen, params = {}) {
   clearChannels();
+  root.className = 'phone'; // 페이지별 레이아웃 클래스 초기화(예: pc-game)
   root.innerHTML = '';
   if (screen === 'auth') renderAuth(root);
   else if (screen === 'lobby') renderLobby(root);

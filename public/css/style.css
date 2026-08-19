@@ -355,6 +355,32 @@ input, textarea, select, [contenteditable] {
 .type-m { background: #e2ecff; color: #3b63c9; }
 .type-f { background: #ffe4ef; color: #d5478a; }
 .type-x { background: #e9f7ec; color: #2a9d6f; }
+
+/* ---------- 게임 페이지 PC(코트 보드) 레이아웃 ---------- */
+@media (min-width: 900px) {
+  .phone.pc-game { max-width: 1080px; }
+  .game-page.pc .game-layout {
+    display: grid; grid-template-columns: 1fr 320px; gap: 18px; align-items: start;
+  }
+  .court-board {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px; margin-bottom: 20px;
+  }
+  .court-card {
+    background: var(--card); border-radius: 16px; padding: 15px; box-shadow: var(--shadow-sm);
+    min-height: 150px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .court-card.busy { border-top: 4px solid var(--primary); }
+  .court-card.empty {
+    border: 2px dashed var(--line); background: transparent;
+    align-items: center; justify-content: center; color: var(--muted);
+  }
+  .court-num { font-size: 15px; font-weight: 800; }
+  .court-body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .court-empty { font-size: 14px; }
+  .side-col { position: sticky; top: 72px; }
+  .side-list { max-height: 68vh; overflow-y: auto; }
+}
 .checklist { display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto; margin-bottom: 14px; }
 .check-row input:disabled + .cr-main { opacity: .4; }
 .check-row .cr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
