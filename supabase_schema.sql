@@ -327,6 +327,130 @@ create policy games_delete on public.games
   for delete to authenticated using (public.has_room_perm(room_id, 'event'));
 
 -- ============================================================
+--  게임 진행: 참여자 로스터 / 대기·게임중 매치 (코트 운영)
+--  모든 변경은 아래 SECURITY DEFINER 함수로만 (권한: has_room_perm 'event')
+-- ============================================================
+create table if not exists public.game_participants (
+  game_id  uuid not null references public.games(id) on delete cascade,
+  user_id  uuid not null references public.profiles(id) on delete cascade,
+  added_at timestamptz not null default now(),
+  primary key (game_id, user_id)
+);
+alter table public.game_participants enable row level security;
+drop policy if exists gp_select on public.game_participants;
+create policy gp_select on public.game_participants for select to authenticated using (true);
+
+create table if not exists public.matches (
+  id         uuid primary key default gen_random_uuid(),
+  game_id    uuid not null references public.games(id) on delete cascade,
+  status     text not null default 'waiting',   -- waiting | playing
+  court      int,                                -- 게임중일 때 코트 번호
+  created_at timestamptz not null default now()
+);
+create index if not exists matches_game_idx on public.matches(game_id);
+alter table public.matches enable row level security;
+drop policy if exists m_select on public.matches;
+create policy m_select on public.matches for select to authenticated using (true);
+
+create table if not exists public.match_players (
+  match_id uuid not null references public.matches(id) on delete cascade,
+  user_id  uuid not null references public.profiles(id) on delete cascade,
+  primary key (match_id, user_id)
+);
+alter table public.match_players enable row level security;
+drop policy if exists mp_select on public.match_players;
+create policy mp_select on public.match_players for select to authenticated using (true);
+
+-- 참여자 추가 (정원 내, 해당 모임의 approved 모임원만)
+create or replace function public.add_game_participant(p_game_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare rid uuid; cap int; cur int;
+begin
+  select room_id, max_players into rid, cap from games where id = p_game_id;
+  if rid is null then raise exception 'no game'; end if;
+  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if not exists (select 1 from room_members where room_id = rid and user_id = p_user and status = 'approved') then
+    raise exception 'not a member';
+  end if;
+  select count(*) into cur from game_participants where game_id = p_game_id;
+  if cur >= cap and not exists (select 1 from game_participants where game_id = p_game_id and user_id = p_user) then
+    raise exception 'full';
+  end if;
+  insert into game_participants(game_id, user_id) values (p_game_id, p_user) on conflict do nothing;
+end; $$;
+
+-- 참여자 제외 (매치에 포함돼 있으면 불가)
+create or replace function public.remove_game_participant(p_game_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare rid uuid;
+begin
+  select room_id into rid from games where id = p_game_id;
+  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if exists (select 1 from match_players mp join matches mm on mm.id = mp.match_id
+             where mm.game_id = p_game_id and mp.user_id = p_user) then
+    raise exception 'in match';
+  end if;
+  delete from game_participants where game_id = p_game_id and user_id = p_user;
+end; $$;
+
+-- 대기 매치 생성 (정확히 4명, 참여자 & 매치 미중복)
+create or replace function public.create_waiting_match(p_game_id uuid, p_users uuid[])
+returns uuid language plpgsql security definer set search_path = public as $$
+declare rid uuid; mid uuid; u uuid;
+begin
+  select room_id into rid from games where id = p_game_id;
+  if rid is null then raise exception 'no game'; end if;
+  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if array_length(p_users, 1) is distinct from 4 then raise exception 'need 4'; end if;
+  if exists (select 1 from unnest(p_users) uu
+             where uu not in (select user_id from game_participants where game_id = p_game_id)) then
+    raise exception 'not participant';
+  end if;
+  if exists (select 1 from match_players mp join matches mm on mm.id = mp.match_id
+             where mm.game_id = p_game_id and mp.user_id = any(p_users)) then
+    raise exception 'already in match';
+  end if;
+  insert into matches(game_id, status) values (p_game_id, 'waiting') returning id into mid;
+  foreach u in array p_users loop
+    insert into match_players(match_id, user_id) values (mid, u);
+  end loop;
+  return mid;
+end; $$;
+
+-- 코트 지정 → 게임중 (코트 범위/중복 검사)
+create or replace function public.assign_match_court(p_match_id uuid, p_court int)
+returns void language plpgsql security definer set search_path = public as $$
+declare rid uuid; gid uuid; ncourts int;
+begin
+  select g.room_id, g.id, g.courts into rid, gid, ncourts
+    from matches m join games g on g.id = m.game_id where m.id = p_match_id;
+  if rid is null then raise exception 'no match'; end if;
+  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if p_court < 1 or p_court > ncourts then raise exception 'bad court'; end if;
+  if exists (select 1 from matches where game_id = gid and status = 'playing' and court = p_court and id <> p_match_id) then
+    raise exception 'court busy';
+  end if;
+  update matches set status = 'playing', court = p_court where id = p_match_id;
+end; $$;
+
+-- 매치 완료/취소(삭제)
+create or replace function public.complete_match(p_match_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare rid uuid;
+begin
+  select g.room_id into rid from matches m join games g on g.id = m.game_id where m.id = p_match_id;
+  if rid is null then raise exception 'no match'; end if;
+  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  delete from matches where id = p_match_id;
+end; $$;
+
+grant execute on function public.add_game_participant(uuid, uuid) to authenticated;
+grant execute on function public.remove_game_participant(uuid, uuid) to authenticated;
+grant execute on function public.create_waiting_match(uuid, uuid[]) to authenticated;
+grant execute on function public.assign_match_court(uuid, int) to authenticated;
+grant execute on function public.complete_match(uuid) to authenticated;
+
+-- ============================================================
 --  프로필 사진 저장소 (Supabase Storage 'avatars' 버킷)
 -- ============================================================
 insert into storage.buckets (id, name, public)
@@ -372,6 +496,18 @@ begin
   end;
   begin
     alter publication supabase_realtime add table public.games;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.matches;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.match_players;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.game_participants;
   exception when duplicate_object then null;
   end;
 end $$;

@@ -3,6 +3,7 @@ import { sb, CONFIG_OK } from './supabase.js';
 import { renderAuth } from './auth.js';
 import { renderLobby, renderFind, renderMyRooms } from './lobby.js';
 import { renderRoom } from './room.js';
+import { renderGame } from './game.js';
 import { toast } from './util.js';
 
 const root = document.getElementById('app');
@@ -38,6 +39,7 @@ export function go(screen, params = {}) {
   else if (screen === 'find') renderFind(root);
   else if (screen === 'myrooms') renderMyRooms(root);
   else if (screen === 'room') renderRoom(root, params.roomId);
+  else if (screen === 'game') renderGame(root, params.gameId);
 }
 
 // 로그인 유저의 프로필 로드

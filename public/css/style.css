@@ -313,6 +313,26 @@ html, body {
 .g-main { flex: 1; min-width: 0; }
 .g-when { font-size: 14.5px; font-weight: 700; }
 .g-sub { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.g-main { cursor: pointer; }
+
+/* 게임 상세: 매치(대기/게임중) */
+.badge.wait { background: #e7ecfb; color: #5b74c9; }
+.match-list { display: flex; flex-direction: column; gap: 10px; }
+.match-card { background: var(--card); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow-sm); }
+.match-card.playing { border-left: 3px solid var(--primary); }
+.match-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.match-players { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.court-tag { background: #efeaff; color: var(--primary); font-weight: 800; font-size: 12.5px; padding: 5px 10px; border-radius: 999px; flex-shrink: 0; }
+.match-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.mini-btn.done { background: var(--success); color: #fff; }
+
+/* 체크리스트 / 코트 선택 모달 */
+.checklist { display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto; margin-bottom: 14px; }
+.check-row { display: flex; align-items: center; gap: 10px; padding: 12px 6px; border-bottom: 1px solid var(--line); font-size: 15px; cursor: pointer; }
+.check-row input { width: 18px; height: 18px; flex-shrink: 0; }
+.court-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.court-btn { border: 1.5px solid var(--line); background: #fbfbfe; border-radius: 12px; padding: 16px 8px; font-size: 15px; font-weight: 700; color: var(--ink); cursor: pointer; }
+.court-btn:active { transform: translateY(1px); }
 
 /* ---------- 방 상세 ---------- */
 .room-detail { padding: 14px 16px 30px; display: flex; flex-direction: column; gap: 16px; }

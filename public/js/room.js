@@ -152,7 +152,7 @@ function renderMain() {
       .map(
         (g) => `
         <div class="game-item">
-          <div class="g-main">
+          <div class="g-main" data-open-game="${g.id}" role="button" tabindex="0">
             <div class="g-when">🗓️ ${fmtDateTime(g.play_at)}</div>
             <div class="g-sub">
               ${g.location ? `<span>📍 ${esc(g.location)}</span>` : ''}
@@ -208,6 +208,9 @@ function renderMain() {
   );
   main.querySelectorAll('[data-del-game]').forEach((b) =>
     b.addEventListener('click', () => onDeleteGame(b.dataset.delGame))
+  );
+  main.querySelectorAll('[data-open-game]').forEach((el) =>
+    el.addEventListener('click', () => go('game', { gameId: el.dataset.openGame }))
   );
 }
 
