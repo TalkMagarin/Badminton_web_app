@@ -93,9 +93,13 @@ drop policy if exists room_members_select on public.room_members;
 create policy room_members_select on public.room_members
   for select to authenticated using (true);
 
+-- 공개 모임에만 직접 참여 가능. 비공개 모임은 아래 join_room_with_password() 로만 참여.
 drop policy if exists room_members_insert on public.room_members;
 create policy room_members_insert on public.room_members
-  for insert to authenticated with check (user_id = auth.uid());
+  for insert to authenticated with check (
+    user_id = auth.uid()
+    and exists (select 1 from public.rooms r where r.id = room_id and r.is_private = false)
+  );
 
 drop policy if exists room_members_delete on public.room_members;
 create policy room_members_delete on public.room_members
@@ -118,6 +122,55 @@ drop trigger if exists trg_add_host_as_member on public.rooms;
 create trigger trg_add_host_as_member
   after insert on public.rooms
   for each row execute function public.add_host_as_member();
+
+-- ============================================================
+--  비공개 모임 암호 (해시로 저장, 클라이언트는 절대 읽지 못함)
+-- ============================================================
+create extension if not exists pgcrypto;
+
+create table if not exists public.room_passwords (
+  room_id uuid primary key references public.rooms(id) on delete cascade,
+  pw_hash text not null
+);
+-- RLS 켜고 정책을 아예 두지 않음 → 클라이언트는 select/insert 모두 불가.
+-- 아래 SECURITY DEFINER 함수만 이 표에 접근한다.
+alter table public.room_passwords enable row level security;
+
+-- 방장이 비공개 모임 암호를 설정 (모임 생성 직후 호출)
+create or replace function public.set_room_password(p_room_id uuid, p_password text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from rooms where id = p_room_id and host_id = auth.uid()) then
+    raise exception 'not host';
+  end if;
+  if length(coalesce(p_password, '')) < 4 then
+    raise exception 'password too short';
+  end if;
+  insert into room_passwords(room_id, pw_hash)
+  values (p_room_id, crypt(p_password, gen_salt('bf')))
+  on conflict (room_id) do update set pw_hash = excluded.pw_hash;
+end;
+$$;
+
+-- 암호 확인 후 참여 (일치 시 참여자 등록하고 true, 아니면 false)
+create or replace function public.join_room_with_password(p_room_id uuid, p_password text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare ok boolean;
+begin
+  select (pw_hash = crypt(p_password, pw_hash)) into ok
+  from room_passwords where room_id = p_room_id;
+  if ok is distinct from true then
+    return false;
+  end if;
+  insert into room_members(room_id, user_id)
+  values (p_room_id, auth.uid())
+  on conflict do nothing;
+  return true;
+end;
+$$;
+
+grant execute on function public.set_room_password(uuid, text) to authenticated;
+grant execute on function public.join_room_with_password(uuid, text) to authenticated;
 
 -- ============================================================
 --  Realtime : 변경 사항을 클라이언트로 브로드캐스트할 테이블 등록

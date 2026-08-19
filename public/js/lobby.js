@@ -103,10 +103,11 @@ function paintRooms() {
   if (statRooms) statRooms.textContent = openCount;
 
   const rows = roomsCache.filter((r) => {
-    // 비공개 모임은 본인이 방장인 경우에만 목록에 노출
-    if (r.is_private && r.host_id !== myId) return false;
-    if (!searchText) return true;
-    return (r.title || '').toLowerCase().includes(searchText);
+    const matches = (r.title || '').toLowerCase().includes(searchText);
+    // 검색어가 없으면: 공개 모임 + 내가 만든 비공개 모임만
+    if (!searchText) return !r.is_private || r.host_id === myId;
+    // 검색 중이면: 이름이 일치하면 비공개도 노출(암호로 입장)
+    return matches;
   });
 
   if (!rows.length) {
@@ -150,21 +151,74 @@ function paintRooms() {
 async function onJoin(roomId) {
   const room = roomsCache.find((r) => r.id === roomId);
   const uid = store.session.user.id;
+
+  // 방장은 바로 입장(이미 참여자)
+  if (room && room.host_id === uid) return go('room', { roomId });
+
+  // 비공개 모임은 암호 입력 후 입장
+  if (room && room.is_private) return openPasswordPrompt(room);
+
+  // 공개 모임: 정원 체크 후 직접 참여
   const cnt = room ? memberCount(room) : 0;
   const isFull = room && cnt >= room.max_members;
-
-  // 이미 방장/참여자면 그냥 입장. 아니면 정원 체크.
   const { error } = await sb.from('room_members').insert({ room_id: roomId, user_id: uid });
   if (error) {
-    // 이미 참여 중(중복 PK)이면 그대로 입장
-    if ((error.code === '23505') || (error.message || '').includes('duplicate')) {
-      return go('room', { roomId });
+    if (error.code === '23505' || (error.message || '').includes('duplicate')) {
+      return go('room', { roomId }); // 이미 참여 중
     }
     if (isFull) return toast('정원이 가득 찼어요.', 'error');
     console.error(error);
     return toast('입장에 실패했습니다.', 'error');
   }
   go('room', { roomId });
+}
+
+// 비공개 모임 암호 입력 모달
+function openPasswordPrompt(room) {
+  const modal = h('div', { class: 'modal-overlay' });
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-head">
+        <h3>🔒 ${esc(room.title)}</h3>
+        <button class="icon-btn" id="p-close" aria-label="닫기">✕</button>
+      </div>
+      <form id="pw-form" class="modal-body">
+        <label class="field"><span>모임 암호</span>
+          <input name="pw" type="password" placeholder="암호를 입력하세요" autocomplete="off" required />
+        </label>
+        <button type="submit" class="btn btn-primary">입장하기</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  modal.querySelector('#p-close').addEventListener('click', close);
+  modal.querySelector('#pw-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    const pw = String(new FormData(e.target).get('pw') || '');
+    if (!pw) return toast('암호를 입력하세요.', 'error');
+    btn.disabled = true;
+    btn.textContent = '확인 중…';
+    const { data, error } = await sb.rpc('join_room_with_password', {
+      p_room_id: room.id,
+      p_password: pw,
+    });
+    btn.disabled = false;
+    btn.textContent = '입장하기';
+    if (error) {
+      console.error(error);
+      return toast('입장에 실패했습니다.', 'error');
+    }
+    if (data === true) {
+      close();
+      go('room', { roomId: room.id });
+    } else {
+      toast('암호가 올바르지 않아요.', 'error');
+    }
+  });
+  setTimeout(() => modal.querySelector('input[name=pw]')?.focus(), 50);
 }
 
 // ---------- 모임 생성 모달 ----------
@@ -203,6 +257,9 @@ function openCreateModal() {
           <input type="hidden" name="is_private" value="false" />
           <small class="hint" id="vis-hint">누구나 모임 찾기에서 볼 수 있어요</small>
         </div>
+        <label class="field" id="pw-field" style="display:none"><span>모임 암호</span>
+          <input name="room_password" type="password" placeholder="4자 이상" autocomplete="off" maxlength="30" />
+        </label>
         <button type="submit" class="btn btn-primary">모임 만들기</button>
       </form>
     </div>
@@ -218,13 +275,19 @@ function openCreateModal() {
   const seg = modal.querySelector('#seg-visibility');
   const hidden = modal.querySelector('input[name=is_private]');
   const visHint = modal.querySelector('#vis-hint');
+  const pwField = modal.querySelector('#pw-field');
+  const pwInput = modal.querySelector('input[name=room_password]');
   seg.addEventListener('click', (e) => {
     const b = e.target.closest('.seg-btn');
     if (!b) return;
     seg.querySelectorAll('.seg-btn').forEach((x) => x.classList.toggle('active', x === b));
+    const priv = b.dataset.v === 'true';
     hidden.value = b.dataset.v;
-    visHint.textContent =
-      b.dataset.v === 'true' ? '나만 볼 수 있어요 (모임 찾기에서 숨김)' : '누구나 모임 찾기에서 볼 수 있어요';
+    visHint.textContent = priv
+      ? '모임 찾기에선 숨겨지고, 검색 시 나와요. 암호로 입장해요.'
+      : '누구나 모임 찾기에서 볼 수 있어요';
+    pwField.style.display = priv ? '' : 'none';
+    if (!priv) pwInput.value = '';
   });
 
   modal.querySelector('#create-form').addEventListener('submit', (e) => onCreate(e, close));
@@ -238,8 +301,12 @@ async function onCreate(e, close) {
   if (!title) return toast('모임명을 입력하세요.', 'error');
   const max_members = Math.max(2, Math.min(99, Number(fd.get('max_members')) || 4));
   const is_private = fd.get('is_private') === 'true';
+  const password = String(fd.get('room_password') || '');
   const grade_min = String(fd.get('grade_min') || '') || null;
   const grade_max = String(fd.get('grade_max') || '') || null;
+
+  if (is_private && password.length < 4)
+    return toast('비공개 모임은 암호(4자 이상)를 설정하세요.', 'error');
 
   btn.disabled = true;
   btn.textContent = '생성 중…';
@@ -255,12 +322,30 @@ async function onCreate(e, close) {
     })
     .select('id')
     .single();
-  btn.disabled = false;
-  btn.textContent = '모임 만들기';
   if (error) {
+    btn.disabled = false;
+    btn.textContent = '모임 만들기';
     console.error(error);
     return toast('모임 생성에 실패했습니다.', 'error');
   }
+
+  // 비공개면 암호 설정. 실패 시 유령 모임 방지 위해 롤백(삭제).
+  if (is_private) {
+    const { error: pwErr } = await sb.rpc('set_room_password', {
+      p_room_id: data.id,
+      p_password: password,
+    });
+    if (pwErr) {
+      console.error(pwErr);
+      await sb.from('rooms').delete().eq('id', data.id);
+      btn.disabled = false;
+      btn.textContent = '모임 만들기';
+      return toast('암호 설정에 실패했습니다. 다시 시도해 주세요.', 'error');
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = '모임 만들기';
   close();
   toast('모임을 만들었어요!', 'success');
   go('room', { roomId: data.id }); // 방장은 트리거로 자동 참여됨
