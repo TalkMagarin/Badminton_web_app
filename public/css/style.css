@@ -34,7 +34,27 @@ html, body {
   color: var(--ink);
   font-family: 'OmuDaye', "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, -apple-system, sans-serif;
   -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* 당겨서 새로고침 / 오버스크롤 바운스 방지 */
+  overscroll-behavior: none;
+  /* 더블탭/핀치 확대 억제 (스크롤은 허용) */
+  touch-action: manipulation;
+  /* 텍스트 드래그·선택 방지 */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+
+/* 입력 요소는 선택·편집 가능해야 함 */
+input, textarea, select, [contenteditable] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+}
+
+/* 내부 스크롤 영역은 스크롤 체이닝 차단 */
+.modal, .drawer-body, .checklist, .cselect-panel { overscroll-behavior: contain; }
 
 /* 모바일 세로 프레임 (데스크톱에서도 폰 폭으로 중앙 정렬) */
 .phone {
