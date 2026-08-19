@@ -25,7 +25,7 @@ async function load(gameId) {
   const [gameRes, partRes, matchRes] = await Promise.all([
     sb.from('games').select('id, room_id, play_at, location, courts, max_players').eq('id', gameId).maybeSingle(),
     sb.from('game_participants').select('games_played, user:profiles(id, name, avatar_url, gender, exp_start, grade_region, grade_national)').eq('game_id', gameId),
-    sb.from('matches').select('id, status, court, created_at, players:match_players(user:profiles(id, name, avatar_url))').eq('game_id', gameId).order('created_at', { ascending: true }),
+    sb.from('matches').select('id, status, court, created_at, players:match_players(user:profiles(id, name, avatar_url, gender))').eq('game_id', gameId).order('created_at', { ascending: true }),
   ]);
 
   const main = rootEl.querySelector('.room-detail');
@@ -70,6 +70,21 @@ function playerNames(m) {
   return (m.players || []).map((p) => esc(p.user?.name || '?')).join(' · ');
 }
 
+// 4명의 성별로 경기 유형 판별 (남복/여복/혼복/혼성)
+function matchType(genders) {
+  if (!genders || genders.length < 4) return null;
+  const m = genders.filter((g) => g === 'male').length;
+  const f = genders.filter((g) => g === 'female').length;
+  if (m === 4) return { label: '남복', cls: 'type-m' };
+  if (f === 4) return { label: '여복', cls: 'type-f' };
+  if (m === 2 && f === 2) return { label: '혼복', cls: 'type-x' };
+  return { label: '혼성', cls: 'type-x' };
+}
+function matchTypeBadge(m) {
+  const t = matchType((m.players || []).map((p) => p.user?.gender));
+  return t ? `<span class="type-badge ${t.cls}">${t.label}</span>` : '';
+}
+
 function renderMain() {
   const { game, participants, matches, canManage } = gctx;
   const waiting = matches.filter((m) => m.status === 'waiting');
@@ -84,7 +99,10 @@ function renderMain() {
     .map(
       (m) => `
       <div class="match-card">
-        <div class="match-info"><div class="match-players">${playerNames(m)}</div></div>
+        <div class="match-info">
+          ${matchTypeBadge(m)}
+          <div class="match-players">${playerNames(m)}</div>
+        </div>
         ${canManage ? `<div class="match-actions">
           <button class="mini-btn ok" data-assign="${m.id}">코트 지정</button>
           <button class="mini-btn no" data-cancel="${m.id}">취소</button>
@@ -99,6 +117,7 @@ function renderMain() {
       <div class="match-card playing">
         <div class="match-info">
           <span class="court-tag">코트 ${m.court}</span>
+          ${matchTypeBadge(m)}
           <div class="match-players">${playerNames(m)}</div>
         </div>
         ${canManage ? `<button class="mini-btn done" data-complete="${m.id}">완료</button>` : ''}
@@ -244,11 +263,18 @@ function openAddWaiting() {
   const available = gctx.participants.filter((u) => !gctx.statusMap[u.id]);
   if (available.length < 4) return toast('대기 등록에는 대기 가능한 참여자 4명이 필요해요.', 'error');
 
+  const gmap = {};
+  available.forEach((u) => (gmap[u.id] = u.gender));
   openChecklist({
     title: '대기 등록',
     items: available.map((u) => ({ value: u.id, label: u.name, sub: pInfo(u, true) })),
     max: 4,
     remainText: (n) => (n > 0 ? `${n}명 더 선택` : '4명 선택 완료'),
+    extraNote: (ids) => {
+      if (ids.length !== 4) return '';
+      const t = matchType(ids.map((id) => gmap[id]));
+      return t ? `경기 유형: ${t.label}` : '';
+    },
     confirmText: '대기 등록',
     onConfirm: async (ids) => {
       if (ids.length !== 4) return toast('정확히 4명을 선택하세요.', 'error');
@@ -310,14 +336,14 @@ async function completeMatch(matchId, verb) {
 
 // ---------- 공용 체크리스트 모달 ----------
 // max: 최대 선택 수(초과 선택 차단). remainText(n): 남은 수 표시 문구.
-function openChecklist({ title, items, max, remainText, confirmText, onConfirm }) {
+function openChecklist({ title, items, max, remainText, extraNote, confirmText, onConfirm }) {
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
     <div class="modal">
       <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="cl-close" aria-label="닫기">✕</button></div>
       <div class="modal-body">
-        ${max != null ? `<div class="check-remain" id="cl-remain"></div>` : ''}
+        ${max != null || extraNote ? `<div class="check-remain"><span id="cl-remain"></span><span id="cl-note" class="cl-note"></span></div>` : ''}
         <div class="checklist">
           ${items
             .map(
@@ -341,12 +367,16 @@ function openChecklist({ title, items, max, remainText, confirmText, onConfirm }
 
   const boxes = [...modal.querySelectorAll('input[type=checkbox]')];
   const remainEl = modal.querySelector('#cl-remain');
+  const noteEl = modal.querySelector('#cl-note');
   const update = () => {
-    if (max == null) return;
-    const checked = boxes.filter((b) => b.checked).length;
-    const left = max - checked;
-    boxes.forEach((b) => { if (!b.checked) b.disabled = checked >= max; }); // 0이면 나머지 선택 불가
-    if (remainEl) remainEl.textContent = remainText ? remainText(left) : `남은 선택 ${left}`;
+    const checkedBoxes = boxes.filter((b) => b.checked);
+    const checked = checkedBoxes.length;
+    if (max != null) {
+      const left = max - checked;
+      boxes.forEach((b) => { if (!b.checked) b.disabled = checked >= max; }); // 0이면 나머지 선택 불가
+      if (remainEl) remainEl.textContent = remainText ? remainText(left) : `남은 선택 ${left}`;
+    }
+    if (noteEl && extraNote) noteEl.textContent = extraNote(checkedBoxes.map((b) => b.value)) || '';
   };
   modal.querySelector('.checklist').addEventListener('change', update);
   update(); // 초기 표시
