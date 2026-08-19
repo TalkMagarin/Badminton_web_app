@@ -297,6 +297,36 @@ grant execute on function public.transfer_ownership(uuid, uuid) to authenticated
 grant execute on function public.delete_empty_room(uuid) to authenticated;
 
 -- ============================================================
+--  게임(정모/번개) : 모임 내 일정. 생성은 '정모/번개 생성' 권한자(owner/운영진)만
+-- ============================================================
+create table if not exists public.games (
+  id          uuid primary key default gen_random_uuid(),
+  room_id     uuid not null references public.rooms(id) on delete cascade,
+  play_at     timestamptz not null default now(),   -- 일정&시간(미입력 시 오늘/현재)
+  location    text,                                  -- 장소(선택)
+  courts      int not null default 1 check (courts >= 1),        -- 코트수(최소 1)
+  max_players int not null default 4 check (max_players >= 1),   -- 참여자 수
+  created_by  uuid references public.profiles(id),
+  created_at  timestamptz not null default now()
+);
+create index if not exists games_room_idx on public.games(room_id, play_at);
+
+alter table public.games enable row level security;
+
+drop policy if exists games_select on public.games;
+create policy games_select on public.games
+  for select to authenticated using (true);
+
+drop policy if exists games_insert on public.games;
+create policy games_insert on public.games
+  for insert to authenticated
+  with check (created_by = auth.uid() and public.has_room_perm(room_id, 'event'));
+
+drop policy if exists games_delete on public.games;
+create policy games_delete on public.games
+  for delete to authenticated using (public.has_room_perm(room_id, 'event'));
+
+-- ============================================================
 --  프로필 사진 저장소 (Supabase Storage 'avatars' 버킷)
 -- ============================================================
 insert into storage.buckets (id, name, public)
@@ -338,6 +368,10 @@ begin
   end;
   begin
     alter publication supabase_realtime add table public.room_members;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table public.games;
   exception when duplicate_object then null;
   end;
 end $$;

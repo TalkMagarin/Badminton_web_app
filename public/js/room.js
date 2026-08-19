@@ -1,7 +1,7 @@
 // 모임 상세: 가입요청/승인, 역할(모임장·운영진·참여자), 설정 페이지
 import { sb } from './supabase.js';
 import { store, go } from './app.js';
-import { esc, initials, expText, gradeSummary, toast } from './util.js';
+import { esc, initials, expText, gradeSummary, fmtDateTime, toast } from './util.js';
 
 const PROFILE_COLS = 'id, name, username, exp_start, grade_region, grade_national, avatar_url';
 let rootEl = null;
@@ -42,6 +42,8 @@ async function load(roomId) {
   const canApprove = myRole === 'owner' || (myRole === 'staff' && my?.can_approve);
   const canReject = myRole === 'owner' || (myRole === 'staff' && my?.can_reject);
 
+  const canCreateEvent = myRole === 'owner' || (myRole === 'staff' && my?.can_create_event);
+
   let pending = [];
   if (canApprove || canReject) {
     const { data } = await sb
@@ -53,7 +55,19 @@ async function load(roomId) {
     pending = data || [];
   }
 
-  ctx = { roomId, room, my, myRole, canApprove, canReject, members: memRes.data || [], pending };
+  // 게임(정모/번개) 목록 — 승인된 참여자에게 표시
+  let games = [];
+  const isApprovedMember = ['owner', 'staff', 'member'].includes(myRole);
+  if (isApprovedMember) {
+    const { data } = await sb
+      .from('games')
+      .select('id, play_at, location, courts, max_players, created_by')
+      .eq('room_id', roomId)
+      .order('play_at', { ascending: true });
+    games = data || [];
+  }
+
+  ctx = { roomId, room, my, myRole, canApprove, canReject, canCreateEvent, members: memRes.data || [], pending, games };
   renderMain();
 }
 
@@ -76,12 +90,15 @@ function memberRow(m) {
 }
 
 function renderMain() {
-  const { room, myRole, members, pending, canApprove, canReject } = ctx;
+  const { room, myRole, members, pending, canApprove, canReject, canCreateEvent, games } = ctx;
   const isApproved = ['owner', 'staff', 'member'].includes(myRole);
 
-  // 상단 톱니바퀴 (승인된 참여자만)
+  // 상단 액션: + (게임 생성 권한자) · ⚙ (승인된 참여자)
   const actions = rootEl.querySelector('#room-top-actions');
-  actions.innerHTML = isApproved ? `<button class="icon-btn" id="btn-room-settings" title="설정" aria-label="설정">⚙️</button>` : '';
+  actions.innerHTML =
+    (canCreateEvent ? `<button class="icon-btn" id="btn-add-game" title="게임 만들기" aria-label="게임 만들기">＋</button>` : '') +
+    (isApproved ? `<button class="icon-btn" id="btn-room-settings" title="설정" aria-label="설정">⚙️</button>` : '');
+  if (canCreateEvent) actions.querySelector('#btn-add-game').addEventListener('click', openGameModal);
   if (isApproved) actions.querySelector('#btn-room-settings').addEventListener('click', openSettings);
 
   const main = rootEl.querySelector('.room-detail');
@@ -128,12 +145,38 @@ function renderMain() {
       </section>`;
   }
 
-  // 참여자 목록 (승인된 사람에게만 표시)
+  // 게임(정모/번개) 목록 (승인된 사람에게만 표시)
+  let gameBlock = '';
+  if (isApproved) {
+    const items = (games || [])
+      .map(
+        (g) => `
+        <div class="game-item">
+          <div class="g-main">
+            <div class="g-when">🗓️ ${fmtDateTime(g.play_at)}</div>
+            <div class="g-sub">
+              ${g.location ? `<span>📍 ${esc(g.location)}</span>` : ''}
+              <span>🏸 코트 ${g.courts}</span>
+              <span>👥 정원 ${g.max_players}명</span>
+            </div>
+          </div>
+          ${canCreateEvent ? `<button class="mini-btn no" data-del-game="${g.id}">삭제</button>` : ''}
+        </div>`
+      )
+      .join('');
+    gameBlock = `
+      <section class="rooms-section">
+        <div class="section-head"><h2>게임 (${games.length})</h2></div>
+        ${games.length ? `<div class="game-list">${items}</div>` : `<div class="empty">아직 등록된 게임이 없어요.</div>`}
+      </section>`;
+  }
+
+  // 모임원 목록 (승인된 사람에게만 표시)
   let memberBlock = '';
   if (isApproved) {
     memberBlock = `
       <section class="rooms-section">
-        <div class="section-head"><h2>참여자 (${members.length})</h2></div>
+        <div class="section-head"><h2>모임원 (${members.length})</h2></div>
         <div class="member-list">${members.map(memberRow).join('')}</div>
       </section>`;
   }
@@ -148,6 +191,7 @@ function renderMain() {
     </section>
     ${actionBlock}
     ${requestBlock}
+    ${gameBlock}
     ${memberBlock}
   `;
 
@@ -162,6 +206,87 @@ function renderMain() {
   main.querySelectorAll('[data-reject]').forEach((b) =>
     b.addEventListener('click', () => onReject(b.dataset.reject))
   );
+  main.querySelectorAll('[data-del-game]').forEach((b) =>
+    b.addEventListener('click', () => onDeleteGame(b.dataset.delGame))
+  );
+}
+
+// ---------- 게임(정모/번개) 생성 / 삭제 ----------
+function openGameModal() {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-head">
+        <h3>게임 만들기</h3>
+        <button class="icon-btn" id="g-close" aria-label="닫기">✕</button>
+      </div>
+      <form id="game-form" class="modal-body">
+        <label class="field"><span>일정 &amp; 시간 (선택)</span>
+          <input name="play_at" type="datetime-local" />
+          <small class="hint">비워두면 오늘로 등록돼요.</small>
+        </label>
+        <label class="field"><span>장소 (선택)</span>
+          <input name="location" placeholder="예) OO체육관 A코트" maxlength="40" />
+        </label>
+        <div class="field-row">
+          <label class="field"><span>코트수 (최소 1)</span>
+            <input name="courts" type="number" inputmode="numeric" min="1" max="50" value="1" required />
+          </label>
+          <label class="field"><span>참여자 수</span>
+            <input name="max_players" type="number" inputmode="numeric" min="1" max="500" value="4" required />
+          </label>
+        </div>
+        <button type="submit" class="btn btn-primary">게임 만들기</button>
+      </form>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  modal.querySelector('#g-close').addEventListener('click', close);
+  modal.querySelector('#game-form').addEventListener('submit', (e) => onCreateGame(e, close));
+}
+
+async function onCreateGame(e, close) {
+  e.preventDefault();
+  const btn = e.target.querySelector('button[type=submit]');
+  const fd = new FormData(e.target);
+  const playRaw = String(fd.get('play_at') || '');
+  const play_at = playRaw ? new Date(playRaw).toISOString() : new Date().toISOString(); // 미입력 시 오늘
+  const location = String(fd.get('location') || '').trim() || null;
+  const courts = Math.max(1, Number(fd.get('courts')) || 1);
+  const max_players = Math.max(1, Number(fd.get('max_players')) || 1);
+
+  btn.disabled = true;
+  btn.textContent = '생성 중…';
+  const { error } = await sb.from('games').insert({
+    room_id: ctx.roomId,
+    play_at,
+    location,
+    courts,
+    max_players,
+    created_by: store.session.user.id,
+  });
+  btn.disabled = false;
+  btn.textContent = '게임 만들기';
+  if (error) {
+    console.error(error);
+    return toast('게임 생성에 실패했습니다.', 'error');
+  }
+  close();
+  toast('게임을 만들었어요!', 'success');
+  load(ctx.roomId);
+}
+
+async function onDeleteGame(gameId) {
+  if (!confirm('이 게임을 삭제할까요?')) return;
+  const { error } = await sb.from('games').delete().eq('id', gameId);
+  if (error) {
+    console.error(error);
+    return toast('삭제에 실패했습니다.', 'error');
+  }
+  toast('게임을 삭제했어요.', 'info');
+  load(ctx.roomId);
 }
 
 // ---------- 가입요청 / 취소 ----------
@@ -361,6 +486,7 @@ function subscribe(roomId) {
   const ch = sb
     .channel(`room-${roomId}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, () => load(roomId))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'games', filter: `room_id=eq.${roomId}` }, () => load(roomId))
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, () => {
       toast('모임이 종료되었어요.', 'info');
       go('lobby');

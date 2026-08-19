@@ -307,6 +307,13 @@ html, body {
 }
 .btn.compact { width: auto; padding: 11px 16px; white-space: nowrap; }
 
+/* 게임(정모/번개) 아이템 */
+.game-list { display: flex; flex-direction: column; gap: 10px; }
+.game-item { background: var(--card); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow-sm); }
+.g-main { flex: 1; min-width: 0; }
+.g-when { font-size: 14.5px; font-weight: 700; }
+.g-sub { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+
 /* ---------- 방 상세 ---------- */
 .room-detail { padding: 14px 16px 30px; display: flex; flex-direction: column; gap: 16px; }
 .room-head-card .rh-title { margin: 0 0 10px; font-size: 19px; }
