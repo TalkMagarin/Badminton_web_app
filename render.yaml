@@ -1,0 +1,14 @@
+# Render 배포 정의 (Blueprint). 대시보드에서 New + → Blueprint 로 이 저장소 연결.
+services:
+  - type: web
+    name: badminton-app
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: SUPABASE_URL
+        sync: false          # 대시보드에서 직접 입력
+      - key: SUPABASE_ANON_KEY
+        sync: false          # 대시보드에서 직접 입력
