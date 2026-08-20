@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#8AA0F7" />
+  <title>라켓로비 · 회원가입</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/ds.css" />
+  <script src="/env.js"></script>
+  <script src="/confirmModal.js"></script>
+  <script>document.addEventListener('gesturestart', (e) => e.preventDefault());</script>
+</head>
+<body class="page-fade-in">
+  <div class="auth-screen">
+    <div class="logo-wrap" style="margin-bottom:14px">
+      <div class="logo-circle" style="width:64px;height:64px;font-size:30px;border-radius:20px">🏸</div>
+      <div class="logo-title" style="font-size:20px">회원가입</div>
+    </div>
+    <form class="card" id="signup-form" novalidate>
+      <label class="field"><span>아이디</span>
+        <input name="username" autocomplete="username" placeholder="영문/숫자 3~20자" required />
+      </label>
+      <label class="field"><span>비밀번호</span>
+        <input name="password" type="password" autocomplete="new-password" placeholder="6자 이상" required />
+      </label>
+      <label class="field"><span>이름</span>
+        <input name="name" placeholder="이름" required />
+      </label>
+      <div class="field"><span>성별</span>
+        <div class="segmented" id="seg-gender">
+          <button type="button" class="seg-btn" data-v="male">남자</button>
+          <button type="button" class="seg-btn" data-v="female">여자</button>
+        </div>
+        <input type="hidden" name="gender" value="" />
+      </div>
+      <div class="field"><span>구력 (운동 시작 년·월)</span>
+        <div class="field-row" id="exp-mount"></div>
+        <small class="hint" id="exp-hint">운동 시작 년·월을 선택하세요</small>
+      </div>
+      <div class="field-row">
+        <div class="field"><span>지역 급수</span><div id="region-mount"></div></div>
+        <div class="field"><span>전국 급수</span><div id="national-mount"></div></div>
+      </div>
+      <button type="submit" class="btn btn-primary" id="signup-btn">가입하기</button>
+    </form>
+    <p class="switch">이미 계정이 있으신가요? <a href="/">로그인</a></p>
+  </div>
+
+  <script type="module">
+    import { sb, usernameToEmail } from '/js/supabase.js';
+    import { GRADES, expText, toast } from '/js/util.js';
+    import { dropdown } from '/js/components.js';
+
+    const nowY = new Date().getFullYear(), nowM = new Date().getMonth() + 1;
+    const yearOpts = []; for (let y = nowY; y >= nowY - 40; y--) yearOpts.push({ value: String(y), label: `${y}년` });
+    const monthOpts = []; for (let m = 1; m <= 12; m++) monthOpts.push({ value: String(m), label: `${m}월` });
+    const gradeOpts = [{ value: '', label: '(없음)' }].concat(GRADES.map((g) => ({ value: g.code, label: `${g.label}${g.sub ? ` (${g.sub})` : ''}` })));
+
+    const expHint = document.getElementById('exp-hint');
+    const updateExp = () => {
+      const y = yearDd.get(), m = monthDd.get();
+      if (!y || !m) { expHint.textContent = '운동 시작 년·월을 선택하세요'; expHint.classList.remove('err'); return; }
+      if (new Date(+y, +m - 1, 1) > new Date(nowY, nowM - 1, 1)) { expHint.textContent = '미래는 선택할 수 없어요'; expHint.classList.add('err'); return; }
+      expHint.classList.remove('err'); expHint.textContent = `구력 ${expText(`${y}-${String(m).padStart(2, '0')}-01`)}`;
+    };
+    const yearDd = dropdown({ options: yearOpts, placeholder: '년도', onChange: updateExp });
+    const monthDd = dropdown({ options: monthOpts, placeholder: '월', onChange: updateExp });
+    const regionDd = dropdown({ options: gradeOpts, value: '' });
+    const nationalDd = dropdown({ options: gradeOpts, value: '' });
+    document.getElementById('exp-mount').append(yearDd.el, monthDd.el);
+    document.getElementById('region-mount').append(regionDd.el);
+    document.getElementById('national-mount').append(nationalDd.el);
+
+    const genderSeg = document.getElementById('seg-gender');
+    const genderInput = document.querySelector('input[name=gender]');
+    genderSeg.addEventListener('click', (e) => {
+      const b = e.target.closest('.seg-btn'); if (!b) return;
+      genderSeg.querySelectorAll('.seg-btn').forEach((x) => x.classList.toggle('active', x === b));
+      genderInput.value = b.dataset.v;
+    });
+
+    document.getElementById('signup-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('signup-btn');
+      const fd = new FormData(e.target);
+      const username = String(fd.get('username') || '').trim();
+      const password = String(fd.get('password') || '');
+      const name = String(fd.get('name') || '').trim();
+      const gender = String(fd.get('gender') || '');
+      const y = yearDd.get(), m = monthDd.get();
+
+      if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) return toast('아이디는 영문/숫자 3~20자로 입력하세요.', 'error');
+      if (password.length < 6) return toast('비밀번호는 6자 이상이어야 합니다.', 'error');
+      if (!name) return toast('이름을 입력하세요.', 'error');
+      if (gender !== 'male' && gender !== 'female') return toast('성별을 선택하세요.', 'error');
+      if (!y || !m) return toast('구력(운동 시작 년·월)을 선택하세요.', 'error');
+      if (new Date(+y, +m - 1, 1) > new Date(nowY, nowM - 1, 1)) return toast('구력은 미래로 설정할 수 없어요.', 'error');
+
+      btn.disabled = true; btn.textContent = '가입 중…';
+      const { data, error } = await sb.auth.signUp({ email: usernameToEmail(username), password });
+      if (error) {
+        btn.disabled = false; btn.textContent = '가입하기';
+        return toast((error.message || '').toLowerCase().includes('already') ? '이미 사용 중인 아이디입니다.' : '가입 실패: ' + error.message, 'error');
+      }
+      const uid = data.user?.id;
+      if (!data.session || !uid) { btn.disabled = false; btn.textContent = '가입하기'; return toast('가입 확인 설정을 확인하세요.', 'error'); }
+      const { error: pErr } = await sb.from('profiles').insert({
+        id: uid, username, name, gender,
+        exp_start: `${y}-${String(m).padStart(2, '0')}-01`,
+        grade_region: regionDd.get() || null, grade_national: nationalDd.get() || null,
+      });
+      if (pErr) {
+        console.error(pErr); await sb.auth.signOut();
+        btn.disabled = false; btn.textContent = '가입하기';
+        return toast((pErr.message || '').includes('duplicate') ? '이미 사용 중인 아이디입니다.' : '프로필 저장 실패', 'error');
+      }
+      location.replace('/lobby.html');
+    });
+  </script>
+</body>
+</html>

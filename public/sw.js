@@ -1,6 +1,6 @@
 // 라켓로비 서비스워커 (설치 가능 + 네트워크 우선, 오프라인 폴백)
-const CACHE = 'racketlobby-v1';
-const SHELL = ['/', '/index.html', '/css/style.css', '/js/app.js'];
+const CACHE = 'racketlobby-v2';
+const SHELL = ['/'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

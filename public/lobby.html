@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#8AA0F7" />
+  <title>라켓로비</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/ds.css" />
+  <script src="/env.js"></script>
+  <script src="/confirmModal.js"></script>
+  <script>document.addEventListener('gesturestart', (e) => e.preventDefault());</script>
+</head>
+<body class="home-mode page-fade-in">
+  <div class="wrapper home-mode">
+    <header class="home-header">
+      <div class="app-name"><span>🏸</span> 라켓로비</div>
+      <div class="top-actions">
+        <button class="icon-btn" id="btn-noti" aria-label="알림">🔔</button>
+        <button class="icon-btn" id="btn-settings" aria-label="설정">⚙️</button>
+      </div>
+    </header>
+    <main class="content" id="lobby-content">
+      <div class="empty">불러오는 중…</div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { requireAuth, goPage } from '/js/guard.js';
+    import { expText, gradeSummary, esc, initials } from '/js/util.js';
+
+    const auth = await requireAuth();
+    if (auth) {
+      const p = auth.profile;
+      document.getElementById('lobby-content').innerHTML = `
+        <section class="profile-card">
+          <div class="avatar">${p.avatar_url ? `<img src="${esc(p.avatar_url)}" alt="">` : esc(initials(p.name))}</div>
+          <div class="profile-meta">
+            <div class="p-name">${esc(p.name)} <span class="p-username">@${esc(p.username)}</span></div>
+            <div class="p-tags">
+              <span class="tag">구력 ${expText(p.exp_start)}</span>
+              <span class="tag">${esc(gradeSummary(p.grade_region, p.grade_national))}</span>
+            </div>
+          </div>
+        </section>
+        <section class="menu-list">
+          <button class="menu-card" id="card-find">
+            <div class="menu-ic">🔍</div>
+            <div class="menu-tx"><div class="menu-title">모임 찾기</div><div class="menu-sub">모임을 검색하거나 새로 만들기</div></div>
+            <div class="menu-arrow">›</div>
+          </button>
+          <button class="menu-card" id="card-my">
+            <div class="menu-ic">📋</div>
+            <div class="menu-tx"><div class="menu-title">가입한 모임</div><div class="menu-sub">내가 만들거나 가입한 모임</div></div>
+            <div class="menu-arrow">›</div>
+          </button>
+        </section>
+      `;
+      document.getElementById('card-find').addEventListener('click', () => goPage('/find.html'));
+      document.getElementById('card-my').addEventListener('click', () => goPage('/myrooms.html'));
+      document.getElementById('btn-noti').addEventListener('click', () => goPage('/notifications.html'));
+      document.getElementById('btn-settings').addEventListener('click', () => goPage('/settings.html'));
+    }
+  </script>
+</body>
+</html>
