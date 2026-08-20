@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#8AA0F7" />
+  <title>가입한 모임 · 라켓로비</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/ds.css" />
+  <script src="/env.js"></script>
+  <script src="/confirmModal.js"></script>
+  <script>document.addEventListener('gesturestart', (e) => e.preventDefault());</script>
+</head>
+<body class="home-mode page-fade-in">
+  <div class="wrapper home-mode">
+    <header class="sub-header">
+      <button class="sub-back-btn" id="btn-back" aria-label="뒤로">←</button>
+      <div class="sub-title">가입한 모임</div>
+      <div class="sub-actions"></div>
+    </header>
+    <main class="content">
+      <div class="list" id="my-list"><div class="empty">불러오는 중…</div></div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb } from '/js/supabase.js';
+    import { requireAuth, goPage } from '/js/guard.js';
+    import { gradeLabel, esc } from '/js/util.js';
+
+    const auth = await requireAuth();
+    if (!auth) throw new Error('no auth');
+    const uid = auth.uid;
+    document.getElementById('btn-back').addEventListener('click', () => goPage('/lobby.html'));
+
+    const ROLE_BADGE = { owner: '<span class="badge host">모임장</span>', staff: '<span class="badge staff">운영진</span>', member: '' };
+    const memberCount = (r) => r.room_members?.[0]?.count ?? 0;
+
+    async function load() {
+      const list = document.getElementById('my-list');
+      const { data: mems, error } = await sb.from('room_members').select('role, room_id').eq('user_id', uid).eq('status', 'approved');
+      if (error) { console.error(error); if (list) list.innerHTML = '<div class="empty">목록을 불러오지 못했습니다.</div>'; return; }
+      const roleMap = {}; (mems || []).forEach((m) => (roleMap[m.room_id] = m.role));
+      const ids = Object.keys(roleMap);
+      if (!ids.length) { list.innerHTML = '<div class="empty">아직 가입한 모임이 없어요.<br>모임 찾기에서 참여해 보세요!</div>'; return; }
+      const { data: rooms } = await sb.from('rooms').select('*, host:profiles!rooms_host_id_fkey(name), room_members(count)').in('id', ids).order('created_at', { ascending: false });
+      list.innerHTML = (rooms || []).map((r) => {
+        const cnt = memberCount(r), full = cnt >= r.max_members;
+        const gr = r.grade_min || r.grade_max ? `${gradeLabel(r.grade_min || r.grade_max)}${r.grade_min && r.grade_max && r.grade_min !== r.grade_max ? `~${gradeLabel(r.grade_max)}` : ''}` : '';
+        const badges = (r.status === 'playing' ? '<span class="badge playing">경기중</span>' : '') + (r.is_private ? '<span class="badge private">비공개</span>' : '') + (ROLE_BADGE[roleMap[r.id]] || '');
+        return `<button class="list-card" data-id="${r.id}">
+          <div class="list-main">
+            <div class="list-title">${esc(r.title)} ${badges}</div>
+            ${gr ? `<div class="list-sub"><span>🏅 ${esc(gr)}</span></div>` : ''}
+            <div class="list-host">모임장 ${esc(r.host?.name || '알 수 없음')}</div>
+          </div>
+          <div class="count ${full ? 'is-full' : ''}"><span class="count-num">${cnt}/${r.max_members}</span><span class="count-label">${full ? '마감' : '모집중'}</span></div>
+        </button>`;
+      }).join('');
+      list.querySelectorAll('.list-card').forEach((b) => b.addEventListener('click', () => goPage('/room.html?id=' + b.dataset.id)));
+    }
+
+    let rt = null;
+    rt = sb.channel('my-db')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => { clearTimeout(rt._t); rt._t = setTimeout(load, 250); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => { clearTimeout(rt._t); rt._t = setTimeout(load, 250); })
+      .subscribe();
+    window.addEventListener('pagehide', () => { if (rt) sb.removeChannel(rt); });
+
+    load();
+  </script>
+</body>
+</html>
