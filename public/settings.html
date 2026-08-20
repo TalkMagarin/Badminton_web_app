@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#8AA0F7" />
+  <title>설정 · 라켓로비</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/ds.css" />
+  <script src="/env.js"></script>
+  <script src="/confirmModal.js"></script>
+  <script>document.addEventListener('gesturestart', (e) => e.preventDefault());</script>
+</head>
+<body class="home-mode page-fade-in">
+  <div class="wrapper home-mode">
+    <header class="sub-header">
+      <button class="sub-back-btn" id="btn-back" aria-label="뒤로">←</button>
+      <div class="sub-title">설정</div>
+      <div class="sub-actions"></div>
+    </header>
+    <main class="content">
+      <section class="card">
+        <div class="field"><span>프로필 사진</span>
+          <div class="avatar-edit">
+            <div class="avatar" id="ps-avatar"></div>
+            <label class="btn btn-outline compact"><span id="ps-file-tx">사진 등록</span><input type="file" accept="image/*" id="ps-file" hidden /></label>
+          </div>
+        </div>
+        <div class="field"><span>구력 (운동 시작 년·월)</span><div class="field-row" id="ps-exp"></div></div>
+        <div class="field-row">
+          <div class="field"><span>지역 급수</span><div id="ps-region"></div></div>
+          <div class="field"><span>전국 급수</span><div id="ps-national"></div></div>
+        </div>
+        <button class="btn btn-primary" id="ps-save">저장</button>
+      </section>
+      <button class="btn btn-outline" id="ps-logout" style="margin-top:4px">로그아웃</button>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb } from '/js/supabase.js';
+    import { requireAuth, goPage } from '/js/guard.js';
+    import { GRADES, expText, esc, initials, toast } from '/js/util.js';
+    import { dropdown } from '/js/components.js';
+
+    const auth = await requireAuth();
+    if (!auth) throw new Error('no auth');
+    const p = auth.profile, uid = auth.uid;
+    document.getElementById('btn-back').addEventListener('click', () => goPage('/lobby.html'));
+
+    const avatarEl = document.getElementById('ps-avatar');
+    avatarEl.innerHTML = p.avatar_url ? `<img src="${esc(p.avatar_url)}" alt="">` : esc(initials(p.name));
+
+    const nowY = new Date().getFullYear(), nowM = new Date().getMonth() + 1;
+    const yearOpts = []; for (let y = nowY; y >= nowY - 40; y--) yearOpts.push({ value: String(y), label: `${y}년` });
+    const monthOpts = []; for (let m = 1; m <= 12; m++) monthOpts.push({ value: String(m), label: `${m}월` });
+    const gradeOpts = [{ value: '', label: '(없음)' }].concat(GRADES.map((g) => ({ value: g.code, label: `${g.label}${g.sub ? ` (${g.sub})` : ''}` })));
+    const [sy, smRaw] = String(p.exp_start || '').split('-');
+    const sm = smRaw ? String(Number(smRaw)) : '';
+    const yearDd = dropdown({ options: yearOpts, value: sy || '', placeholder: '년도' });
+    const monthDd = dropdown({ options: monthOpts, value: sm, placeholder: '월' });
+    const regionDd = dropdown({ options: gradeOpts, value: p.grade_region || '' });
+    const nationalDd = dropdown({ options: gradeOpts, value: p.grade_national || '' });
+    document.getElementById('ps-exp').append(yearDd.el, monthDd.el);
+    document.getElementById('ps-region').append(regionDd.el);
+    document.getElementById('ps-national').append(nationalDd.el);
+
+    const fileInput = document.getElementById('ps-file'), fileTx = document.getElementById('ps-file-tx');
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files[0]; if (!file) return;
+      if (!file.type.startsWith('image/')) return toast('이미지 파일만 등록할 수 있어요.', 'error');
+      if (file.size > 2 * 1024 * 1024) return toast('2MB 이하 이미지만 등록할 수 있어요.', 'error');
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `${uid}/${Date.now()}.${ext}`;
+      fileTx.textContent = '업로드 중…';
+      const up = await sb.storage.from('avatars').upload(path, file, { upsert: true, contentType: file.type });
+      if (up.error) { console.error(up.error); fileTx.textContent = '사진 등록'; return toast('업로드 실패: ' + up.error.message, 'error'); }
+      const url = sb.storage.from('avatars').getPublicUrl(path).data.publicUrl;
+      const { error } = await sb.from('profiles').update({ avatar_url: url }).eq('id', uid);
+      if (error) { console.error(error); fileTx.textContent = '사진 등록'; return toast('저장에 실패했습니다.', 'error'); }
+      avatarEl.innerHTML = `<img src="${esc(url)}" alt="">`;
+      fileTx.textContent = '사진 변경'; toast('사진을 등록했어요.', 'success');
+    });
+
+    document.getElementById('ps-save').addEventListener('click', async () => {
+      const y = yearDd.get(), m = monthDd.get();
+      if (!y || !m) return toast('구력(운동 시작 년·월)을 선택하세요.', 'error');
+      if (new Date(+y, +m - 1, 1) > new Date(nowY, nowM - 1, 1)) return toast('구력은 미래로 설정할 수 없어요.', 'error');
+      const exp_start = `${y}-${String(m).padStart(2, '0')}-01`;
+      const grade_region = regionDd.get() || null, grade_national = nationalDd.get() || null;
+      const btn = document.getElementById('ps-save'); btn.disabled = true; btn.textContent = '저장 중…';
+      const { error } = await sb.from('profiles').update({ exp_start, grade_region, grade_national }).eq('id', uid);
+      btn.disabled = false; btn.textContent = '저장';
+      if (error) { console.error(error); return toast('저장에 실패했습니다.', 'error'); }
+      toast('저장했어요.', 'success');
+    });
+
+    document.getElementById('ps-logout').addEventListener('click', async () => {
+      if (!(await showConfirm({ title: '로그아웃', message: '로그아웃할까요?', confirmText: '로그아웃' }))) return;
+      await sb.auth.signOut(); location.replace('/');
+    });
+  </script>
+</body>
+</html>
