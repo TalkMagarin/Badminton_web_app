@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#8AA0F7" />
+  <title>모임 정보 · 라켓로비</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/ds.css" />
+  <script src="/env.js"></script>
+  <script src="/confirmModal.js"></script>
+  <script>document.addEventListener('gesturestart', (e) => e.preventDefault());</script>
+  <style>
+    .member-item { background:#fff; border-radius:14px; padding:12px 14px; display:flex; gap:12px; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+    .member-item.request .req-actions { display:flex; gap:6px; flex-shrink:0; }
+    .notice-card { font-size:14px; color:var(--ink); line-height:1.55; }
+    .room-actions { margin-top:6px; }
+    .settings-sec { margin-bottom:22px; }
+    .settings-sec h4 { font-size:15px; font-weight:800; margin-bottom:10px; }
+    .settings-note { font-size:12.5px; color:var(--muted); margin-top:8px; line-height:1.45; }
+    .staff-list { display:flex; flex-direction:column; gap:10px; }
+    .staff-row { background:#fff; border-radius:14px; padding:12px 14px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+    .staff-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .staff-name { font-size:14.5px; font-weight:700; }
+    .sw { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); cursor:pointer; white-space:nowrap; }
+    .sw input { width:16px; height:16px; }
+    .perm-row { display:flex; flex-wrap:wrap; gap:9px 14px; margin-top:11px; padding-top:11px; border-top:1px solid var(--line); }
+    .perm-row label { font-size:13px; display:inline-flex; align-items:center; gap:5px; cursor:pointer; }
+    .inline-row { display:flex; gap:8px; }
+    .inline-row select { flex:1; }
+    .game-item { background:#fff; border-radius:14px; padding:12px 14px; display:flex; align-items:center; gap:10px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+    .g-main { flex:1; min-width:0; cursor:pointer; }
+    .g-when { font-size:14.5px; font-weight:700; }
+    .g-sub { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12.5px; color:var(--muted); margin-top:4px; }
+  </style>
+</head>
+<body class="home-mode page-fade-in">
+  <div class="wrapper home-mode">
+    <header class="sub-header">
+      <button class="sub-back-btn" id="btn-back" aria-label="뒤로">←</button>
+      <div class="sub-title">모임 정보</div>
+      <div class="sub-actions" id="room-actions"></div>
+    </header>
+    <main class="content" id="room-main"><div class="empty">불러오는 중…</div></main>
+  </div>
+
+  <script type="module">
+    import { sb } from '/js/supabase.js';
+    import { requireAuth, goPage } from '/js/guard.js';
+    import { esc, initials, expText, gradeSummary, fmtDateTime, toast } from '/js/util.js';
+
+    const auth = await requireAuth();
+    if (!auth) throw new Error('no auth');
+    const uid = auth.uid;
+    const roomId = new URLSearchParams(location.search).get('id');
+    document.getElementById('btn-back').addEventListener('click', () => goPage('/myrooms.html'));
+    if (!roomId) { document.getElementById('room-main').innerHTML = '<div class="empty">잘못된 접근입니다.</div>'; throw new Error('no id'); }
+
+    const PROFILE_COLS = 'id, name, username, exp_start, grade_region, grade_national, avatar_url';
+    let ctx = null;
+
+    async function load() {
+      const [roomRes, myRes, memRes] = await Promise.all([
+        sb.from('rooms').select('*, host:profiles!rooms_host_id_fkey(id, name, username)').eq('id', roomId).maybeSingle(),
+        sb.from('room_members').select('role, status, can_approve, can_reject, can_create_event').eq('room_id', roomId).eq('user_id', uid).maybeSingle(),
+        sb.from('room_members').select(`role, status, joined_at, user:profiles(${PROFILE_COLS})`).eq('room_id', roomId).eq('status', 'approved').order('joined_at', { ascending: true }),
+      ]);
+      const main = document.getElementById('room-main');
+      if (roomRes.error || !roomRes.data) { main.innerHTML = '<div class="empty">모임을 찾을 수 없어요. (삭제되었을 수 있습니다)</div>'; document.getElementById('room-actions').innerHTML = ''; return; }
+      const room = roomRes.data, my = myRes.data;
+      const myRole = my?.status === 'approved' ? my.role : my?.status === 'pending' ? 'pending' : 'visitor';
+      const canApprove = myRole === 'owner' || (myRole === 'staff' && my?.can_approve);
+      const canReject = myRole === 'owner' || (myRole === 'staff' && my?.can_reject);
+      const canCreateEvent = myRole === 'owner' || (myRole === 'staff' && my?.can_create_event);
+      let pending = [];
+      if (canApprove || canReject) {
+        const { data } = await sb.from('room_members').select(`joined_at, user:profiles(${PROFILE_COLS})`).eq('room_id', roomId).eq('status', 'pending').order('joined_at', { ascending: true });
+        pending = data || [];
+      }
+      let games = [];
+      const isApproved = ['owner', 'staff', 'member'].includes(myRole);
+      if (isApproved) {
+        const { data } = await sb.from('games').select('id, play_at, location, courts, max_players').eq('room_id', roomId).order('play_at', { ascending: true });
+        games = data || [];
+      }
+      ctx = { room, my, myRole, canApprove, canReject, canCreateEvent, members: memRes.data || [], pending, games, isApproved };
+      render();
+    }
+
+    const roleBadge = (r) => r === 'owner' ? ' <span class="badge host">모임장</span>' : r === 'staff' ? ' <span class="badge staff">운영진</span>' : '';
+    const avatarHTML = (u) => u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : esc(initials(u.name));
+
+    function render() {
+      const { room, myRole, members, pending, canApprove, canReject, canCreateEvent, games, isApproved } = ctx;
+      const actions = document.getElementById('room-actions');
+      actions.innerHTML = (canCreateEvent ? '<button class="icon-btn" id="btn-add-game" aria-label="게임 만들기">＋</button>' : '') + (isApproved ? '<button class="icon-btn" id="btn-settings" aria-label="설정">⚙️</button>' : '');
+      if (canCreateEvent) actions.querySelector('#btn-add-game').addEventListener('click', openGameModal);
+      if (isApproved) actions.querySelector('#btn-settings').addEventListener('click', openSettings);
+
+      let actionBlock = '';
+      if (myRole === 'visitor') actionBlock = room.is_private ? '<div class="empty">비공개 모임입니다.</div>' : '<div class="room-actions"><button class="btn btn-primary" id="btn-request">가입요청</button></div>';
+      else if (myRole === 'pending') actionBlock = '<section class="card notice-card">⏳ 가입 요청을 보냈어요. 모임장·운영진의 승인을 기다리는 중입니다.</section><div class="room-actions"><button class="btn btn-outline" id="btn-cancel-req">요청 취소</button></div>';
+
+      let requestBlock = '';
+      if ((canApprove || canReject) && pending.length) {
+        requestBlock = `<section class="section"><div class="section-head"><h2>가입 요청 (${pending.length})</h2></div><div class="list">${pending.map((p) => {
+          const u = p.user || {};
+          return `<div class="member-item request"><div class="avatar sm">${avatarHTML(u)}</div><div class="m-meta"><div class="m-name">${esc(u.name)}</div><div class="m-tags">구력 ${expText(u.exp_start)} · ${esc(gradeSummary(u.grade_region, u.grade_national))}</div></div><div class="req-actions">${canApprove ? `<button class="mini-btn ok" data-approve="${u.id}">승인</button>` : ''}${canReject ? `<button class="mini-btn no" data-reject="${u.id}">거부</button>` : ''}</div></div>`;
+        }).join('')}</div></section>`;
+      }
+
+      let gameBlock = '';
+      if (isApproved) {
+        const items = (games || []).map((g) => `<div class="game-item"><div class="g-main" data-open-game="${g.id}"><div class="g-when">🗓️ ${fmtDateTime(g.play_at)}</div><div class="g-sub">${g.location ? `<span>📍 ${esc(g.location)}</span>` : ''}<span>🏸 코트 ${g.courts}</span><span>👥 정원 ${g.max_players}명</span></div></div>${canCreateEvent ? `<button class="mini-btn no" data-del-game="${g.id}">삭제</button>` : ''}</div>`).join('');
+        gameBlock = `<section class="section"><div class="section-head"><h2>게임 (${games.length})</h2></div>${games.length ? `<div class="list">${items}</div>` : '<div class="empty">아직 등록된 게임이 없어요.</div>'}</section>`;
+      }
+
+      let memberBlock = '';
+      if (isApproved) {
+        memberBlock = `<section class="section"><div class="section-head"><h2>모임원 (${members.length})</h2></div><div class="list">${members.map((m) => { const u = m.user || {}; return `<div class="member-item"><div class="avatar sm">${avatarHTML(u)}</div><div class="m-meta"><div class="m-name">${esc(u.name)}${roleBadge(m.role)}</div><div class="m-tags">구력 ${expText(u.exp_start)} · ${esc(gradeSummary(u.grade_region, u.grade_national))}</div></div></div>`; }).join('')}</div></section>`;
+      }
+
+      document.getElementById('room-main').innerHTML = `
+        <section class="card"><h2 style="font-size:19px;font-weight:800;margin-bottom:10px">${esc(room.title)}${room.is_private ? ' <span class="badge private">비공개</span>' : ''}</h2>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--muted)"><div>👤 모임장 ${esc(room.host?.name || '알 수 없음')}</div><div>👥 ${members.length}/${room.max_members}명</div></div></section>
+        ${actionBlock}${requestBlock}${gameBlock}${memberBlock}`;
+
+      const rb = document.getElementById('btn-request'); if (rb) rb.addEventListener('click', onRequestJoin);
+      const cb = document.getElementById('btn-cancel-req'); if (cb) cb.addEventListener('click', onCancelRequest);
+      document.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', () => rpcReload('approve_member', { p_room_id: roomId, p_user: b.dataset.approve }, '가입을 승인했어요.')));
+      document.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', () => rpcReload('reject_member', { p_room_id: roomId, p_user: b.dataset.reject }, '가입을 거부했어요.')));
+      document.querySelectorAll('[data-open-game]').forEach((el) => el.addEventListener('click', () => goPage('/game.html?id=' + el.dataset.openGame)));
+      document.querySelectorAll('[data-del-game]').forEach((b) => b.addEventListener('click', () => onDeleteGame(b.dataset.delGame)));
+    }
+
+    async function rpcReload(fn, args, okMsg) {
+      const { error } = await sb.rpc(fn, args);
+      if (error) { console.error(error); return toast('처리에 실패했습니다.', 'error'); }
+      toast(okMsg, 'success'); load();
+    }
+    async function onRequestJoin() {
+      const { error } = await sb.from('room_members').insert({ room_id: roomId, user_id: uid, status: 'pending', role: 'member' });
+      if (error) { console.error(error); return toast('가입요청에 실패했습니다.', 'error'); }
+      toast('가입 요청을 보냈어요!', 'success'); load();
+    }
+    async function onCancelRequest() {
+      const { error } = await sb.from('room_members').delete().eq('room_id', roomId).eq('user_id', uid);
+      if (error) { console.error(error); return toast('취소에 실패했습니다.', 'error'); }
+      toast('요청을 취소했어요.', 'info'); load();
+    }
+
+    // ── 게임 만들기/삭제 ──
+    function openGameModal() {
+      const m = document.createElement('div'); m.className = 'modal-overlay';
+      m.innerHTML = `<div class="modal"><div class="modal-head"><h3>게임 만들기</h3><button class="icon-btn" id="g-close">✕</button></div>
+        <form id="game-form" class="modal-body">
+          <label class="field"><span>일정 &amp; 시간 (선택)</span><input name="play_at" type="datetime-local" /><small class="hint">비워두면 오늘로 등록돼요.</small></label>
+          <label class="field"><span>장소 (선택)</span><input name="location" placeholder="예) OO체육관 A코트" maxlength="40" /></label>
+          <div class="field-row"><label class="field"><span>코트수 (최소 1)</span><input name="courts" type="number" min="1" max="50" value="1" required /></label><label class="field"><span>참여자 수</span><input name="max_players" type="number" min="1" max="500" value="4" required /></label></div>
+          <button type="submit" class="btn btn-primary" style="margin-top:8px">게임 만들기</button>
+        </form></div>`;
+      document.body.appendChild(m); document.body.classList.add('modal-open');
+      const close = () => { m.remove(); document.body.classList.remove('modal-open'); };
+      m.addEventListener('click', (e) => { if (e.target === m) close(); });
+      m.querySelector('#g-close').addEventListener('click', close);
+      m.querySelector('#game-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = e.target.querySelector('button'); const fd = new FormData(e.target);
+        const playRaw = String(fd.get('play_at') || '');
+        const play_at = playRaw ? new Date(playRaw).toISOString() : new Date().toISOString();
+        const location = String(fd.get('location') || '').trim() || null;
+        const courts = Math.max(1, Number(fd.get('courts')) || 1), max_players = Math.max(1, Number(fd.get('max_players')) || 1);
+        btn.disabled = true; btn.textContent = '생성 중…';
+        const { error } = await sb.from('games').insert({ room_id: roomId, play_at, location, courts, max_players, created_by: uid });
+        btn.disabled = false; btn.textContent = '게임 만들기';
+        if (error) { console.error(error); return toast('게임 생성에 실패했습니다.', 'error'); }
+        close(); toast('게임을 만들었어요!', 'success'); load();
+      });
+    }
+    async function onDeleteGame(gameId) {
+      if (!(await showConfirm({ title: '게임 삭제', message: '이 게임을 삭제할까요?', danger: true }))) return;
+      const { error } = await sb.from('games').delete().eq('id', gameId);
+      if (error) { console.error(error); return toast('삭제에 실패했습니다.', 'error'); }
+      toast('게임을 삭제했어요.', 'info'); load();
+    }
+
+    // ── 설정 ──
+    function openSettings() {
+      const overlay = document.createElement('div'); overlay.className = 'modal-overlay';
+      overlay.innerHTML = `<div class="modal"><div class="modal-head"><h3>모임 설정</h3><button class="icon-btn" id="s-close">✕</button></div><div class="modal-body" id="s-body"></div></div>`;
+      document.body.appendChild(overlay); document.body.classList.add('modal-open');
+      const close = () => { overlay.remove(); document.body.classList.remove('modal-open'); };
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      overlay.querySelector('#s-close').addEventListener('click', close);
+      buildSettings(overlay.querySelector('#s-body'), close);
+    }
+    function buildSettings(body, close) {
+      const { myRole, members } = ctx;
+      const others = members.filter((m) => m.role !== 'owner');
+      if (myRole !== 'owner') {
+        body.innerHTML = `<p class="settings-note">모임에서 나가면 다시 가입요청을 해야 합니다.</p><button class="btn btn-danger" id="btn-leave">모임 탈퇴</button>`;
+        body.querySelector('#btn-leave').addEventListener('click', async () => {
+          if (!(await showConfirm({ title: '모임 탈퇴', message: '정말 모임에서 나갈까요?', confirmText: '탈퇴', danger: true }))) return;
+          const { error } = await sb.from('room_members').delete().eq('room_id', roomId).eq('user_id', uid);
+          if (error) { console.error(error); return toast('탈퇴에 실패했습니다.', 'error'); }
+          close(); toast('모임에서 나왔어요.', 'info'); goPage('/myrooms.html');
+        });
+        return;
+      }
+      const staffRows = others.map((m) => { const u = m.user || {}; const isStaff = m.role === 'staff';
+        return `<div class="staff-row" data-user="${u.id}"><div class="staff-top"><div class="staff-name">${esc(u.name)}${isStaff ? ' <span class="badge staff">운영진</span>' : ''}</div><label class="sw"><input type="checkbox" class="staff-toggle" ${isStaff ? 'checked' : ''}/><span>운영진</span></label></div><div class="perm-row" style="${isStaff ? '' : 'display:none'}"><label><input type="checkbox" class="perm" data-perm="approve" ${m.can_approve ? 'checked' : ''}/> 가입승인</label><label><input type="checkbox" class="perm" data-perm="reject" ${m.can_reject ? 'checked' : ''}/> 가입거부</label><label><input type="checkbox" class="perm" data-perm="event" ${m.can_create_event ? 'checked' : ''}/> 정모·번개 생성</label></div></div>`;
+      }).join('');
+      const transferOpts = others.map((m) => `<option value="${m.user.id}">${esc(m.user.name)}</option>`).join('');
+      const canDelete = others.length === 0;
+      body.innerHTML = `
+        <section class="settings-sec"><h4>운영진 관리</h4>${others.length ? `<div class="staff-list">${staffRows}</div>` : '<p class="settings-note">아직 다른 참여자가 없어요.</p>'}</section>
+        <section class="settings-sec"><h4>모임장 승계</h4>${others.length ? `<div class="inline-row"><select id="transfer-sel">${transferOpts}</select><button class="btn btn-outline compact" id="btn-transfer">승계</button></div><p class="settings-note">선택한 참여자에게 모임장을 넘깁니다. (되돌릴 수 없어요)</p>` : '<p class="settings-note">승계할 참여자가 없어요.</p>'}</section>
+        <section class="settings-sec"><h4>모임 삭제</h4><button class="btn btn-danger" id="btn-delete" ${canDelete ? '' : 'disabled'}>모임 삭제</button><p class="settings-note">${canDelete ? '이 모임을 영구 삭제합니다.' : '참여자가 모두 나가야 삭제할 수 있어요. (모임장 외 0명)'}</p></section>`;
+
+      body.querySelectorAll('.staff-row').forEach((row) => {
+        const userId = row.dataset.user, toggle = row.querySelector('.staff-toggle'), permRow = row.querySelector('.perm-row');
+        const save = async () => {
+          const role = toggle.checked ? 'staff' : 'member'; const perms = {};
+          row.querySelectorAll('.perm').forEach((p) => (perms[p.dataset.perm] = p.checked));
+          const { error } = await sb.rpc('set_member_role', { p_room_id: roomId, p_user: userId, p_role: role, p_can_approve: !!perms.approve, p_can_reject: !!perms.reject, p_can_event: !!perms.event });
+          if (error) { console.error(error); toast('저장에 실패했습니다.', 'error'); }
+        };
+        toggle.addEventListener('change', () => { permRow.style.display = toggle.checked ? '' : 'none'; if (!toggle.checked) row.querySelectorAll('.perm').forEach((p) => (p.checked = false)); save(); });
+        row.querySelectorAll('.perm').forEach((p) => p.addEventListener('change', save));
+      });
+      const tb = body.querySelector('#btn-transfer');
+      if (tb) tb.addEventListener('click', async () => {
+        const target = body.querySelector('#transfer-sel').value;
+        if (!(await showConfirm({ title: '모임장 승계', message: '정말 이 참여자에게 모임장을 넘길까요?', confirmText: '승계', danger: true }))) return;
+        const { error } = await sb.rpc('transfer_ownership', { p_room_id: roomId, p_user: target });
+        if (error) { console.error(error); return toast('승계에 실패했습니다.', 'error'); }
+        close(); toast('모임장을 넘겼어요.', 'success'); load();
+      });
+      const db = body.querySelector('#btn-delete');
+      if (db && canDelete) db.addEventListener('click', async () => {
+        if (!(await showConfirm({ title: '모임 삭제', message: '이 모임을 삭제할까요? 되돌릴 수 없습니다.', confirmText: '삭제', danger: true }))) return;
+        const { error } = await sb.rpc('delete_empty_room', { p_room_id: roomId });
+        if (error) { console.error(error); return toast('삭제에 실패했습니다.', 'error'); }
+        close(); toast('모임을 삭제했어요.', 'info'); goPage('/myrooms.html');
+      });
+    }
+
+    let rt = null;
+    rt = sb.channel(`room-${roomId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'games', filter: `room_id=eq.${roomId}` }, () => load())
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, () => { toast('모임이 종료되었어요.', 'info'); goPage('/myrooms.html'); })
+      .subscribe();
+    window.addEventListener('pagehide', () => { if (rt) sb.removeChannel(rt); });
+
+    load();
+  </script>
+</body>
+</html>
