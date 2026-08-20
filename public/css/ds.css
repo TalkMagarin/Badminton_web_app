@@ -73,8 +73,8 @@ body.home-mode { padding: 0; align-items: flex-start; }
   background: #fff; border-radius: 20px; padding: 22px 18px 18px; width: 100%;
   box-shadow: 0 2px 16px rgba(0,0,0,0.07);
 }
-.field { margin-bottom: 18px; }
-.field > span { display: block; font-size: 12.5px; font-weight: 700; color: #888; margin-bottom: 8px; }
+.field { margin-bottom: 15px; }
+.field > span { display: block; font-size: 12.5px; font-weight: 700; color: #888; margin-bottom: 2px; }
 /* 로그인/가입 카드: 마지막 필드와 버튼 사이 여유 */
 .card .btn { margin-top: 4px; }
 .field-row { display: flex; gap: 10px; }
@@ -82,6 +82,7 @@ body.home-mode { padding: 0; align-items: flex-start; }
 input, .notify-input {
   width: 100%; padding: 13px 15px; border: 1.5px solid #EBEBEB; border-radius: 12px;
   font-size: 15px; color: var(--ink); background: #fff; transition: border-color .2s;
+  margin-bottom: 15px;
 }
 input::placeholder { color: #BBB; }
 input:focus { border-color: var(--c-blue); }
