@@ -260,6 +260,14 @@ body.modal-open { overflow: hidden; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .modal-head h3 { font-size: 17px; font-weight: 800; }
 .modal-body { display: block; }
+/* 중앙 정렬 모달(스크롤 위치와 무관하게 화면 중앙) */
+.modal-overlay.center { align-items: center; padding: 20px; }
+.modal-overlay.center .modal { border-radius: 20px; max-width: 400px; max-height: 88vh; }
+
+/* label.field 안에서 input/button 뒤에 설명(small)이 붙으면, 하단 간격은 small이 담당 */
+.field input:has(+ small), .field select:has(+ small), .field .btn:has(+ small),
+.field .field-row:has(+ small) { margin-bottom: 0; }
+.field small { display: block; margin-bottom: 15px; }
 
 /* 체크리스트 */
 .check-remain { font-size: 13.5px; font-weight: 800; color: var(--c-purple); margin-bottom: 10px; display: flex; justify-content: space-between; gap: 8px; }

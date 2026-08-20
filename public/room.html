@@ -50,6 +50,7 @@
     import { sb } from '/js/supabase.js';
     import { requireAuth, goPage } from '/js/guard.js';
     import { esc, initials, expText, gradeSummary, fmtDateTime, toast } from '/js/util.js';
+    import { dropdown } from '/js/components.js';
 
     const auth = await requireAuth();
     if (!auth) throw new Error('no auth');
@@ -153,23 +154,43 @@
 
     // ── 게임 만들기/삭제 ──
     function openGameModal() {
-      const m = document.createElement('div'); m.className = 'modal-overlay';
+      document.body.classList.remove('page-fade-in'); // 스크롤 위치 무관하게 중앙 표시
+      const now = new Date(), thisY = now.getFullYear();
+      const yearOpts = []; for (let y = thisY; y <= thisY + 1; y++) yearOpts.push({ value: String(y), label: `${y}년` });
+      const monthOpts = []; for (let i = 1; i <= 12; i++) monthOpts.push({ value: String(i), label: `${i}월` });
+      const dayOpts = []; for (let i = 1; i <= 31; i++) dayOpts.push({ value: String(i), label: `${i}일` });
+      const hourOpts = []; for (let i = 0; i < 24; i++) hourOpts.push({ value: String(i), label: `${String(i).padStart(2, '0')}시` });
+      const minOpts = []; for (let i = 0; i < 60; i += 5) minOpts.push({ value: String(i), label: `${String(i).padStart(2, '0')}분` });
+
+      const m = document.createElement('div'); m.className = 'modal-overlay center';
       m.innerHTML = `<div class="modal"><div class="modal-head"><h3>게임 만들기</h3><button class="icon-btn" id="g-close">✕</button></div>
         <form id="game-form" class="modal-body">
-          <label class="field"><span>일정 &amp; 시간 (선택)</span><input name="play_at" type="datetime-local" /><small class="hint">비워두면 오늘로 등록돼요.</small></label>
+          <div class="field"><span>일정 &amp; 시간 (선택)</span>
+            <div class="field-row" id="dt-date"></div>
+            <div class="field-row" id="dt-time" style="margin-top:8px"></div>
+            <small class="hint">비워두면 오늘로 등록돼요.</small>
+          </div>
           <label class="field"><span>장소 (선택)</span><input name="location" placeholder="예) OO체육관 A코트" maxlength="40" /></label>
           <div class="field-row"><label class="field"><span>코트수 (최소 1)</span><input name="courts" type="number" min="1" max="50" value="1" required /></label><label class="field"><span>참여자 수</span><input name="max_players" type="number" min="1" max="500" value="4" required /></label></div>
-          <button type="submit" class="btn btn-primary" style="margin-top:8px">게임 만들기</button>
+          <button type="submit" class="btn btn-primary">게임 만들기</button>
         </form></div>`;
       document.body.appendChild(m); document.body.classList.add('modal-open');
       const close = () => { m.remove(); document.body.classList.remove('modal-open'); };
       m.addEventListener('click', (e) => { if (e.target === m) close(); });
       m.querySelector('#g-close').addEventListener('click', close);
+
+      const yDd = dropdown({ options: yearOpts, placeholder: '년도' }), moDd = dropdown({ options: monthOpts, placeholder: '월' }), dDd = dropdown({ options: dayOpts, placeholder: '일' });
+      const hDd = dropdown({ options: hourOpts, placeholder: '시' }), miDd = dropdown({ options: minOpts, placeholder: '분' });
+      m.querySelector('#dt-date').append(yDd.el, moDd.el, dDd.el);
+      m.querySelector('#dt-time').append(hDd.el, miDd.el);
+
       m.querySelector('#game-form').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const btn = e.target.querySelector('button'); const fd = new FormData(e.target);
-        const playRaw = String(fd.get('play_at') || '');
-        const play_at = playRaw ? new Date(playRaw).toISOString() : new Date().toISOString();
+        const btn = e.target.querySelector('button[type=submit]'); const fd = new FormData(e.target);
+        const y = yDd.get(), mo = moDd.get(), d = dDd.get(), h = hDd.get(), mi = miDd.get();
+        let play_at;
+        if (!y && !mo && !d && !h && !mi) play_at = new Date().toISOString();
+        else play_at = new Date(Number(y) || thisY, (Number(mo) || now.getMonth() + 1) - 1, Number(d) || now.getDate(), Number(h) || 0, Number(mi) || 0).toISOString();
         const location = String(fd.get('location') || '').trim() || null;
         const courts = Math.max(1, Number(fd.get('courts')) || 1), max_players = Math.max(1, Number(fd.get('max_players')) || 1);
         btn.disabled = true; btn.textContent = '생성 중…';
