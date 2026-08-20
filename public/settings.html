@@ -22,10 +22,16 @@
     </header>
     <main class="content">
       <section class="card">
-        <div class="field"><span>프로필 사진</span>
+        <div class="field"><span>프로필</span>
           <div class="avatar-edit">
-            <div class="avatar" id="ps-avatar"></div>
-            <label class="btn btn-outline compact"><span id="ps-file-tx">사진 등록</span><input type="file" accept="image/*" id="ps-file" hidden /></label>
+            <div class="avatar lg" id="ps-avatar"></div>
+            <div style="flex:1;display:flex;flex-direction:column;gap:8px;min-width:0">
+              <div class="segmented" id="ps-gender">
+                <button type="button" class="seg-btn" data-v="male">남자</button>
+                <button type="button" class="seg-btn" data-v="female">여자</button>
+              </div>
+              <label class="btn btn-outline compact" style="align-self:flex-start"><span id="ps-file-tx">사진 등록</span><input type="file" accept="image/*" id="ps-file" hidden /></label>
+            </div>
           </div>
         </div>
         <div class="field"><span>구력 (운동 시작 년·월)</span><div class="field-row" id="ps-exp"></div></div>
@@ -44,6 +50,7 @@
     import { requireAuth, goPage } from '/js/guard.js';
     import { GRADES, expText, esc, initials, toast } from '/js/util.js';
     import { dropdown } from '/js/components.js';
+    import { cropImage } from '/js/cropper.js';
 
     const auth = await requireAuth();
     if (!auth) throw new Error('no auth');
@@ -52,6 +59,13 @@
 
     const avatarEl = document.getElementById('ps-avatar');
     avatarEl.innerHTML = p.avatar_url ? `<img src="${esc(p.avatar_url)}" alt="">` : esc(initials(p.name));
+
+    // 성별
+    let gender = p.gender || '';
+    const genderSeg = document.getElementById('ps-gender');
+    const paintGender = () => genderSeg.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.v === gender));
+    paintGender();
+    genderSeg.addEventListener('click', (e) => { const b = e.target.closest('.seg-btn'); if (!b) return; gender = b.dataset.v; paintGender(); });
 
     const nowY = new Date().getFullYear(), nowM = new Date().getMonth() + 1;
     const yearOpts = []; for (let y = nowY; y >= nowY - 40; y--) yearOpts.push({ value: String(y), label: `${y}년` });
@@ -69,17 +83,18 @@
 
     const fileInput = document.getElementById('ps-file'), fileTx = document.getElementById('ps-file-tx');
     fileInput.addEventListener('change', async () => {
-      const file = fileInput.files[0]; if (!file) return;
+      const file = fileInput.files[0]; fileInput.value = ''; if (!file) return;
       if (!file.type.startsWith('image/')) return toast('이미지 파일만 등록할 수 있어요.', 'error');
-      if (file.size > 2 * 1024 * 1024) return toast('2MB 이하 이미지만 등록할 수 있어요.', 'error');
-      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
-      const path = `${uid}/${Date.now()}.${ext}`;
+      // 용량 제한 없이 원형 크롭 → 정사각(512) JPEG로 축소 업로드
+      const blob = await cropImage(file, 512);
+      if (!blob) return;
+      const path = `${uid}/${Date.now()}.jpg`;
       fileTx.textContent = '업로드 중…';
-      const up = await sb.storage.from('avatars').upload(path, file, { upsert: true, contentType: file.type });
-      if (up.error) { console.error(up.error); fileTx.textContent = '사진 등록'; return toast('업로드 실패: ' + up.error.message, 'error'); }
+      const up = await sb.storage.from('avatars').upload(path, blob, { upsert: true, contentType: 'image/jpeg' });
+      if (up.error) { console.error(up.error); fileTx.textContent = '사진 변경'; return toast('업로드 실패: ' + up.error.message, 'error'); }
       const url = sb.storage.from('avatars').getPublicUrl(path).data.publicUrl;
       const { error } = await sb.from('profiles').update({ avatar_url: url }).eq('id', uid);
-      if (error) { console.error(error); fileTx.textContent = '사진 등록'; return toast('저장에 실패했습니다.', 'error'); }
+      if (error) { console.error(error); fileTx.textContent = '사진 변경'; return toast('저장에 실패했습니다.', 'error'); }
       avatarEl.innerHTML = `<img src="${esc(url)}" alt="">`;
       fileTx.textContent = '사진 변경'; toast('사진을 등록했어요.', 'success');
     });
@@ -88,10 +103,11 @@
       const y = yearDd.get(), m = monthDd.get();
       if (!y || !m) return toast('구력(운동 시작 년·월)을 선택하세요.', 'error');
       if (new Date(+y, +m - 1, 1) > new Date(nowY, nowM - 1, 1)) return toast('구력은 미래로 설정할 수 없어요.', 'error');
+      if (gender !== 'male' && gender !== 'female') return toast('성별을 선택하세요.', 'error');
       const exp_start = `${y}-${String(m).padStart(2, '0')}-01`;
       const grade_region = regionDd.get() || null, grade_national = nationalDd.get() || null;
       const btn = document.getElementById('ps-save'); btn.disabled = true; btn.textContent = '저장 중…';
-      const { error } = await sb.from('profiles').update({ exp_start, grade_region, grade_national }).eq('id', uid);
+      const { error } = await sb.from('profiles').update({ gender, exp_start, grade_region, grade_national }).eq('id', uid);
       btn.disabled = false; btn.textContent = '저장';
       if (error) { console.error(error); return toast('저장에 실패했습니다.', 'error'); }
       toast('저장했어요.', 'success');
