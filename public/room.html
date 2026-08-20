@@ -75,6 +75,7 @@
       const canApprove = myRole === 'owner' || (myRole === 'staff' && my?.can_approve);
       const canReject = myRole === 'owner' || (myRole === 'staff' && my?.can_reject);
       const canCreateEvent = myRole === 'owner' || (myRole === 'staff' && my?.can_create_event);
+      const canKick = myRole === 'owner' || (myRole === 'staff' && my?.can_kick);
       let pending = [];
       if (canApprove || canReject) {
         const { data } = await sb.from('room_members').select(`joined_at, user:profiles(${PROFILE_COLS})`).eq('room_id', roomId).eq('status', 'pending').order('joined_at', { ascending: true });
@@ -86,7 +87,7 @@
         const { data } = await sb.from('games').select('id, play_at, location, courts, max_players').eq('room_id', roomId).order('play_at', { ascending: true });
         games = data || [];
       }
-      ctx = { room, my, myRole, canApprove, canReject, canCreateEvent, members: memRes.data || [], pending, games, isApproved };
+      ctx = { room, my, myRole, canApprove, canReject, canCreateEvent, canKick, members: memRes.data || [], pending, games, isApproved };
       render();
     }
 
@@ -94,11 +95,11 @@
     const avatarHTML = (u) => u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : esc(initials(u.name));
 
     function render() {
-      const { room, myRole, members, pending, canApprove, canReject, canCreateEvent, games, isApproved } = ctx;
+      const { room, myRole, members, pending, canApprove, canReject, canCreateEvent, canKick, games, isApproved } = ctx;
       const actions = document.getElementById('room-actions');
       actions.innerHTML = (canCreateEvent ? '<button class="icon-btn" id="btn-add-game" aria-label="게임 만들기">＋</button>' : '') + (isApproved ? '<button class="icon-btn" id="btn-settings" aria-label="설정">⚙️</button>' : '');
       if (canCreateEvent) actions.querySelector('#btn-add-game').addEventListener('click', openGameModal);
-      if (isApproved) actions.querySelector('#btn-settings').addEventListener('click', openSettings);
+      if (isApproved) actions.querySelector('#btn-settings').addEventListener('click', () => goPage('/roomsettings.html?id=' + roomId));
 
       let actionBlock = '';
       if (myRole === 'visitor') actionBlock = room.is_private ? '<div class="empty">비공개 모임입니다.</div>' : '<div class="room-actions"><button class="btn btn-primary" id="btn-request">가입요청</button></div>';
@@ -120,7 +121,7 @@
 
       let memberBlock = '';
       if (isApproved) {
-        memberBlock = `<section class="section"><div class="section-head"><h2>모임원 (${members.length})</h2></div><div class="list">${members.map((m) => { const u = m.user || {}; return `<div class="member-item"><div class="avatar sm">${avatarHTML(u)}</div><div class="m-meta"><div class="m-name">${esc(u.name)}${roleBadge(m.role)}</div><div class="m-tags">구력 ${expText(u.exp_start)} · ${esc(gradeSummary(u.grade_region, u.grade_national))}</div></div></div>`; }).join('')}</div></section>`;
+        memberBlock = `<section class="section"><div class="section-head"><h2>모임원 (${members.length})</h2></div><div class="list">${members.map((m) => { const u = m.user || {}; const kick = canKick && m.role !== 'owner' && u.id !== uid ? `<button class="mini-btn no" data-kick="${u.id}">추방</button>` : ''; return `<div class="member-item"><div class="avatar sm">${avatarHTML(u)}</div><div class="m-meta"><div class="m-name">${esc(u.name)}${roleBadge(m.role)}</div><div class="m-tags">구력 ${expText(u.exp_start)} · ${esc(gradeSummary(u.grade_region, u.grade_national))}</div></div>${kick}</div>`; }).join('')}</div></section>`;
       }
 
       document.getElementById('room-main').innerHTML = `
@@ -134,6 +135,14 @@
       document.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', () => rpcReload('reject_member', { p_room_id: roomId, p_user: b.dataset.reject }, '가입을 거부했어요.')));
       document.querySelectorAll('[data-open-game]').forEach((el) => el.addEventListener('click', () => goPage('/game.html?id=' + el.dataset.openGame)));
       document.querySelectorAll('[data-del-game]').forEach((b) => b.addEventListener('click', () => onDeleteGame(b.dataset.delGame)));
+      document.querySelectorAll('[data-kick]').forEach((b) => b.addEventListener('click', () => onKick(b.dataset.kick)));
+    }
+
+    async function onKick(userId) {
+      if (!(await showConfirm({ title: '모임 추방', message: '이 모임원을 추방할까요?', confirmText: '추방', danger: true }))) return;
+      const { error } = await sb.rpc('kick_member', { p_room_id: roomId, p_user: userId });
+      if (error) { console.error(error); return toast('추방에 실패했습니다.', 'error'); }
+      toast('추방했어요.', 'info'); load();
     }
 
     async function rpcReload(fn, args, okMsg) {
@@ -205,67 +214,6 @@
       const { error } = await sb.from('games').delete().eq('id', gameId);
       if (error) { console.error(error); return toast('삭제에 실패했습니다.', 'error'); }
       toast('게임을 삭제했어요.', 'info'); load();
-    }
-
-    // ── 설정 ──
-    function openSettings() {
-      const overlay = document.createElement('div'); overlay.className = 'modal-overlay';
-      overlay.innerHTML = `<div class="modal"><div class="modal-head"><h3>모임 설정</h3><button class="icon-btn" id="s-close">✕</button></div><div class="modal-body" id="s-body"></div></div>`;
-      document.body.appendChild(overlay); document.body.classList.add('modal-open');
-      const close = () => { overlay.remove(); document.body.classList.remove('modal-open'); };
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-      overlay.querySelector('#s-close').addEventListener('click', close);
-      buildSettings(overlay.querySelector('#s-body'), close);
-    }
-    function buildSettings(body, close) {
-      const { myRole, members } = ctx;
-      const others = members.filter((m) => m.role !== 'owner');
-      if (myRole !== 'owner') {
-        body.innerHTML = `<p class="settings-note">모임에서 나가면 다시 가입요청을 해야 합니다.</p><button class="btn btn-danger" id="btn-leave">모임 탈퇴</button>`;
-        body.querySelector('#btn-leave').addEventListener('click', async () => {
-          if (!(await showConfirm({ title: '모임 탈퇴', message: '정말 모임에서 나갈까요?', confirmText: '탈퇴', danger: true }))) return;
-          const { error } = await sb.from('room_members').delete().eq('room_id', roomId).eq('user_id', uid);
-          if (error) { console.error(error); return toast('탈퇴에 실패했습니다.', 'error'); }
-          close(); toast('모임에서 나왔어요.', 'info'); goPage('/myrooms.html');
-        });
-        return;
-      }
-      const staffRows = others.map((m) => { const u = m.user || {}; const isStaff = m.role === 'staff';
-        return `<div class="staff-row" data-user="${u.id}"><div class="staff-top"><div class="staff-name">${esc(u.name)}${isStaff ? ' <span class="badge staff">운영진</span>' : ''}</div><label class="sw"><input type="checkbox" class="staff-toggle" ${isStaff ? 'checked' : ''}/><span>운영진</span></label></div><div class="perm-row" style="${isStaff ? '' : 'display:none'}"><label><input type="checkbox" class="perm" data-perm="approve" ${m.can_approve ? 'checked' : ''}/> 가입승인</label><label><input type="checkbox" class="perm" data-perm="reject" ${m.can_reject ? 'checked' : ''}/> 가입거부</label><label><input type="checkbox" class="perm" data-perm="event" ${m.can_create_event ? 'checked' : ''}/> 정모·번개 생성</label></div></div>`;
-      }).join('');
-      const transferOpts = others.map((m) => `<option value="${m.user.id}">${esc(m.user.name)}</option>`).join('');
-      const canDelete = others.length === 0;
-      body.innerHTML = `
-        <section class="settings-sec"><h4>운영진 관리</h4>${others.length ? `<div class="staff-list">${staffRows}</div>` : '<p class="settings-note">아직 다른 참여자가 없어요.</p>'}</section>
-        <section class="settings-sec"><h4>모임장 승계</h4>${others.length ? `<div class="inline-row"><select id="transfer-sel">${transferOpts}</select><button class="btn btn-outline compact" id="btn-transfer">승계</button></div><p class="settings-note">선택한 참여자에게 모임장을 넘깁니다. (되돌릴 수 없어요)</p>` : '<p class="settings-note">승계할 참여자가 없어요.</p>'}</section>
-        <section class="settings-sec"><h4>모임 삭제</h4><button class="btn btn-danger" id="btn-delete" ${canDelete ? '' : 'disabled'}>모임 삭제</button><p class="settings-note">${canDelete ? '이 모임을 영구 삭제합니다.' : '참여자가 모두 나가야 삭제할 수 있어요. (모임장 외 0명)'}</p></section>`;
-
-      body.querySelectorAll('.staff-row').forEach((row) => {
-        const userId = row.dataset.user, toggle = row.querySelector('.staff-toggle'), permRow = row.querySelector('.perm-row');
-        const save = async () => {
-          const role = toggle.checked ? 'staff' : 'member'; const perms = {};
-          row.querySelectorAll('.perm').forEach((p) => (perms[p.dataset.perm] = p.checked));
-          const { error } = await sb.rpc('set_member_role', { p_room_id: roomId, p_user: userId, p_role: role, p_can_approve: !!perms.approve, p_can_reject: !!perms.reject, p_can_event: !!perms.event });
-          if (error) { console.error(error); toast('저장에 실패했습니다.', 'error'); }
-        };
-        toggle.addEventListener('change', () => { permRow.style.display = toggle.checked ? '' : 'none'; if (!toggle.checked) row.querySelectorAll('.perm').forEach((p) => (p.checked = false)); save(); });
-        row.querySelectorAll('.perm').forEach((p) => p.addEventListener('change', save));
-      });
-      const tb = body.querySelector('#btn-transfer');
-      if (tb) tb.addEventListener('click', async () => {
-        const target = body.querySelector('#transfer-sel').value;
-        if (!(await showConfirm({ title: '모임장 승계', message: '정말 이 참여자에게 모임장을 넘길까요?', confirmText: '승계', danger: true }))) return;
-        const { error } = await sb.rpc('transfer_ownership', { p_room_id: roomId, p_user: target });
-        if (error) { console.error(error); return toast('승계에 실패했습니다.', 'error'); }
-        close(); toast('모임장을 넘겼어요.', 'success'); load();
-      });
-      const db = body.querySelector('#btn-delete');
-      if (db && canDelete) db.addEventListener('click', async () => {
-        if (!(await showConfirm({ title: '모임 삭제', message: '이 모임을 삭제할까요? 되돌릴 수 없습니다.', confirmText: '삭제', danger: true }))) return;
-        const { error } = await sb.rpc('delete_empty_room', { p_room_id: roomId });
-        if (error) { console.error(error); return toast('삭제에 실패했습니다.', 'error'); }
-        close(); toast('모임을 삭제했어요.', 'info'); goPage('/myrooms.html');
-      });
     }
 
     let rt = null;

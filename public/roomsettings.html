@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#8AA0F7" />
+  <title>모임 설정 · 라켓로비</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/ds.css" />
+  <script src="/env.js"></script>
+  <script src="/confirmModal.js"></script>
+  <script>document.addEventListener('gesturestart', (e) => e.preventDefault());</script>
+  <style>
+    .set-card { background:#fff; border-radius:16px; padding:18px 16px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    .set-card h4 { font-size:14px; font-weight:800; margin-bottom:12px; }
+    .set-note { font-size:12.5px; color:var(--muted); margin-top:8px; line-height:1.45; }
+    .staff-row { display:flex; align-items:center; gap:10px; padding:11px 0; border-top:1px solid var(--line); }
+    .staff-row:first-child { border-top:none; }
+    .staff-info { flex:1; min-width:0; }
+    .staff-name { font-size:14px; font-weight:700; }
+    .staff-perms { font-size:11.5px; color:var(--c-purple); margin-top:2px; }
+    .staff-perms.none { color:var(--muted); }
+    .perm-group { margin-bottom:14px; }
+    .perm-group-title { font-size:12.5px; font-weight:800; color:#666; margin-bottom:8px; }
+    .perm-check { display:flex; align-items:center; gap:8px; padding:9px 4px; font-size:14px; cursor:pointer; }
+    .perm-check input { width:18px; height:18px; }
+    .picker-search { margin-bottom:10px; }
+    .picker-list { max-height:376px; overflow-y:auto; overscroll-behavior:contain; border:1.5px solid var(--line); border-radius:12px; }
+    .picker-row { display:flex; align-items:center; gap:10px; padding:11px 12px; border-top:1px solid var(--line); cursor:pointer; }
+    .picker-row:first-child { border-top:none; }
+    .picker-row .pk-info { flex:1; min-width:0; }
+    .pk-name { font-size:14px; font-weight:700; }
+    .pk-sub { font-size:11.5px; color:var(--muted); }
+  </style>
+</head>
+<body class="home-mode page-fade-in">
+  <div class="wrapper home-mode">
+    <header class="sub-header">
+      <button class="sub-back-btn" id="btn-back" aria-label="뒤로">←</button>
+      <div class="sub-title">모임 설정</div>
+      <div class="sub-actions"></div>
+    </header>
+    <main class="content" id="set-main"><div class="empty">불러오는 중…</div></main>
+  </div>
+
+  <script type="module">
+    import { sb } from '/js/supabase.js';
+    import { requireAuth, goPage } from '/js/guard.js';
+    import { GRADES, gradeLabel, expText, gradeSummary, esc, initials, toast } from '/js/util.js';
+    import { dropdown } from '/js/components.js';
+
+    const auth = await requireAuth();
+    if (!auth) throw new Error('no auth');
+    const uid = auth.uid;
+    const roomId = new URLSearchParams(location.search).get('id');
+    document.getElementById('btn-back').addEventListener('click', () => goPage('/room.html?id=' + roomId));
+    if (!roomId) { document.getElementById('set-main').innerHTML = '<div class="empty">잘못된 접근입니다.</div>'; throw new Error('no id'); }
+
+    const PROFILE_COLS = 'id, name, username, exp_start, grade_region, grade_national';
+    let ctx = null;
+
+    async function load() {
+      const [roomRes, myRes, memRes] = await Promise.all([
+        sb.from('rooms').select('*').eq('id', roomId).maybeSingle(),
+        sb.from('room_members').select('role').eq('room_id', roomId).eq('user_id', uid).maybeSingle(),
+        sb.from('room_members').select(`role, status, can_approve, can_reject, can_kick, can_create_event, can_operate_game, user:profiles(${PROFILE_COLS})`).eq('room_id', roomId).eq('status', 'approved').order('joined_at', { ascending: true }),
+      ]);
+      const main = document.getElementById('set-main');
+      if (roomRes.error || !roomRes.data) { main.innerHTML = '<div class="empty">모임을 찾을 수 없어요.</div>'; return; }
+      ctx = { room: roomRes.data, isOwner: myRes.data?.role === 'owner', members: memRes.data || [] };
+      render();
+    }
+
+    const PERMS = [
+      { group: '모임 관리', items: [['can_approve', '가입 승인'], ['can_reject', '가입 거부'], ['can_kick', '모임 추방']] },
+      { group: '게임 관리', items: [['can_create_event', '게임 생성'], ['can_operate_game', '게임 운영']] },
+    ];
+    const permSummary = (m) => {
+      const on = [];
+      PERMS.forEach((g) => g.items.forEach(([k, l]) => { if (m[k]) on.push(l); }));
+      return on.length ? on.join(' · ') : '권한 없음';
+    };
+
+    function render() {
+      const { room, isOwner, members } = ctx;
+      const main = document.getElementById('set-main');
+      if (!isOwner) {
+        main.innerHTML = `<section class="set-card"><p class="set-note">모임에서 나가면 다시 가입요청을 해야 합니다.</p><button class="btn btn-danger" id="btn-leave" style="margin-top:12px">모임 탈퇴</button></section>`;
+        document.getElementById('btn-leave').addEventListener('click', onLeave);
+        return;
+      }
+      const staff = members.filter((m) => m.role === 'staff');
+      const others = members.filter((m) => m.role !== 'owner');
+      const gradeOpts = () => '<option value="">무관</option>' + GRADES.map((g) => `<option value="${g.code}">${g.label}</option>`).join('');
+      main.innerHTML = `
+        <section class="set-card">
+          <h4>모임원 (정원)</h4>
+          <div class="field-row" style="align-items:flex-end;gap:10px">
+            <label class="field" style="margin:0;flex:1"><span>최대 인원</span><input id="cap" type="number" min="2" max="500" value="${room.max_members}" /></label>
+            <button class="btn btn-primary compact" id="save-cap" style="margin:0">저장</button>
+          </div>
+        </section>
+        <section class="set-card">
+          <h4>가입 가능 급수</h4>
+          <div class="field-row"><label class="field" style="margin:0;flex:1"><span>하한</span><select id="gmin">${gradeOpts()}</select></label><label class="field" style="margin:0;flex:1"><span>상한</span><select id="gmax">${gradeOpts()}</select></label></div>
+          <button class="btn btn-primary" id="save-grade" style="margin-top:12px">저장</button>
+        </section>
+        <section class="set-card">
+          <h4 style="display:flex;justify-content:space-between;align-items:center">운영진 관리 <button class="mini-btn ok" id="add-staff">＋ 추가</button></h4>
+          <div id="staff-list">${staff.length ? staff.map((m) => `
+            <div class="staff-row" data-user="${m.user.id}">
+              <div class="staff-info"><div class="staff-name">${esc(m.user.name)}</div><div class="staff-perms ${permSummary(m) === '권한 없음' ? 'none' : ''}">${esc(permSummary(m))}</div></div>
+              <button class="mini-btn ghost" data-edit="${m.user.id}">편집</button>
+            </div>`).join('') : '<p class="set-note">아직 운영진이 없어요.</p>'}</div>
+        </section>
+        <section class="set-card">
+          <h4>모임장 승계</h4>
+          <button class="btn btn-outline" id="btn-transfer" ${others.length ? '' : 'disabled'}>모임장 넘기기</button>
+          <p class="set-note">${others.length ? '선택한 참여자에게 모임장을 넘깁니다. (되돌릴 수 없어요)' : '승계할 참여자가 없어요.'}</p>
+        </section>
+        <section class="set-card">
+          <h4>모임 삭제</h4>
+          <button class="btn btn-danger" id="btn-delete" ${others.length === 0 ? '' : 'disabled'}>모임 삭제</button>
+          <p class="set-note">${others.length === 0 ? '이 모임을 영구 삭제합니다.' : '참여자가 모두 나가야 삭제할 수 있어요. (모임장 외 0명)'}</p>
+        </section>`;
+
+      // 급수 프리필
+      document.getElementById('gmin').value = room.grade_min || '';
+      document.getElementById('gmax').value = room.grade_max || '';
+
+      document.getElementById('save-cap').addEventListener('click', saveCap);
+      document.getElementById('save-grade').addEventListener('click', saveGrade);
+      document.getElementById('add-staff').addEventListener('click', openAddStaff);
+      main.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => openPermModal(members.find((m) => m.user.id === b.dataset.edit))));
+      const tb = document.getElementById('btn-transfer'); if (tb && others.length) tb.addEventListener('click', openTransfer);
+      const db = document.getElementById('btn-delete'); if (db && others.length === 0) db.addEventListener('click', onDelete);
+    }
+
+    async function saveCap() {
+      const v = Math.max(2, Math.min(500, Number(document.getElementById('cap').value) || 2));
+      const { error } = await sb.from('rooms').update({ max_members: v }).eq('id', roomId);
+      if (error) { console.error(error); return toast('저장에 실패했습니다.', 'error'); }
+      toast('정원을 변경했어요.', 'success'); load();
+    }
+    async function saveGrade() {
+      const grade_min = document.getElementById('gmin').value || null, grade_max = document.getElementById('gmax').value || null;
+      const { error } = await sb.from('rooms').update({ grade_min, grade_max }).eq('id', roomId);
+      if (error) { console.error(error); return toast('저장에 실패했습니다.', 'error'); }
+      toast('가입 가능 급수를 변경했어요.', 'success'); load();
+    }
+    async function onLeave() {
+      if (!(await showConfirm({ title: '모임 탈퇴', message: '정말 모임에서 나갈까요?', confirmText: '탈퇴', danger: true }))) return;
+      const { error } = await sb.from('room_members').delete().eq('room_id', roomId).eq('user_id', uid);
+      if (error) { console.error(error); return toast('탈퇴에 실패했습니다.', 'error'); }
+      toast('모임에서 나왔어요.', 'info'); goPage('/myrooms.html');
+    }
+    async function onDelete() {
+      if (!(await showConfirm({ title: '모임 삭제', message: '이 모임을 삭제할까요? 되돌릴 수 없습니다.', confirmText: '삭제', danger: true }))) return;
+      const { error } = await sb.rpc('delete_empty_room', { p_room_id: roomId });
+      if (error) { console.error(error); return toast('삭제에 실패했습니다.', 'error'); }
+      toast('모임을 삭제했어요.', 'info'); goPage('/myrooms.html');
+    }
+
+    // 권한 편집 모달
+    function openPermModal(m) {
+      document.body.classList.remove('page-fade-in');
+      const groups = PERMS.map((g) => `<div class="perm-group"><div class="perm-group-title">${g.group}</div>${g.items.map(([k, l]) => `<label class="perm-check"><input type="checkbox" data-perm="${k}" ${m[k] ? 'checked' : ''}/> ${l}</label>`).join('')}</div>`).join('');
+      const ov = mk(`<div class="modal-head"><h3>${esc(m.user.name)} 권한</h3><button class="icon-btn" id="x">✕</button></div>
+        <div class="modal-body">${groups}
+          <button class="btn btn-primary" id="pm-save">저장</button>
+          <button class="btn btn-outline" id="pm-remove" style="margin-top:10px">운영진 해제</button>
+        </div>`);
+      const perms = {}; ov.querySelectorAll('[data-perm]').forEach((c) => { perms[c.dataset.perm] = () => c.checked; });
+      ov.querySelector('#pm-save').addEventListener('click', async () => {
+        await applyRole(m.user.id, 'staff', perms); ov._close(); toast('권한을 저장했어요.', 'success'); load();
+      });
+      ov.querySelector('#pm-remove').addEventListener('click', async () => {
+        await applyRole(m.user.id, 'member', {}); ov._close(); toast('운영진에서 해제했어요.', 'info'); load();
+      });
+    }
+    async function applyRole(userId, role, perms) {
+      const g = (k) => (perms[k] ? perms[k]() : false);
+      const { error } = await sb.rpc('set_member_role', {
+        p_room_id: roomId, p_user: userId, p_role: role,
+        p_can_approve: g('can_approve'), p_can_reject: g('can_reject'), p_can_kick: g('can_kick'),
+        p_can_create_game: g('can_create_event'), p_can_operate_game: g('can_operate_game'),
+      });
+      if (error) { console.error(error); toast('처리에 실패했습니다.', 'error'); }
+    }
+
+    // 운영진 추가 모달 (모임원 중 선택)
+    function openAddStaff() {
+      const cands = ctx.members.filter((m) => m.role === 'member'); // 일반 참여자만
+      if (!cands.length) return toast('추가할 모임원이 없어요.', 'info');
+      openPicker({ title: '운영진 추가', mode: 'checkbox', items: cands, confirmText: '추가', onConfirm: async (ids) => {
+        if (!ids.length) return toast('추가할 모임원을 선택하세요.', 'error');
+        for (const id of ids) await applyRole(id, 'staff', {}); // 권한 없이 운영진 등록 → 이후 편집
+        toast('운영진으로 추가했어요. 권한을 설정해 주세요.', 'success'); load();
+      } });
+    }
+    // 모임장 승계 모달 (라디오)
+    function openTransfer() {
+      const cands = ctx.members.filter((m) => m.role !== 'owner');
+      openPicker({ title: '모임장 승계', mode: 'radio', items: cands, confirmText: '승계', onConfirm: async (ids) => {
+        if (!ids.length) return toast('승계할 참여자를 선택하세요.', 'error');
+        if (!(await showConfirm({ title: '모임장 승계', message: '정말 이 참여자에게 모임장을 넘길까요?', confirmText: '승계', danger: true }))) return;
+        const { error } = await sb.rpc('transfer_ownership', { p_room_id: roomId, p_user: ids[0] });
+        if (error) { console.error(error); return toast('승계에 실패했습니다.', 'error'); }
+        toast('모임장을 넘겼어요.', 'success'); goPage('/room.html?id=' + roomId);
+      } });
+    }
+
+    function openPicker({ title, mode, items, confirmText, onConfirm }) {
+      document.body.classList.remove('page-fade-in');
+      const ov = mk(`<div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="x">✕</button></div>
+        <div class="modal-body">
+          <input class="picker-search" id="pk-search" placeholder="🔍 이름 검색" autocomplete="off" />
+          <div class="picker-list" id="pk-list"></div>
+          <button class="btn btn-primary" id="pk-confirm" style="margin-top:12px">${esc(confirmText)}</button>
+        </div>`);
+      const listEl = ov.querySelector('#pk-list'), search = ov.querySelector('#pk-search');
+      const sel = new Set();
+      const paint = () => {
+        const q = search.value.trim().toLowerCase();
+        const rows = items.filter((m) => (m.user.name || '').toLowerCase().includes(q));
+        listEl.innerHTML = rows.length ? rows.map((m) => {
+          const u = m.user; const on = sel.has(u.id);
+          return `<label class="picker-row" data-id="${u.id}"><input type="${mode}" name="pk" ${on ? 'checked' : ''}/><div class="pk-info"><div class="pk-name">${esc(u.name)}</div><div class="pk-sub">구력 ${expText(u.exp_start)} · ${esc(gradeSummary(u.grade_region, u.grade_national))}</div></div></label>`;
+        }).join('') : '<div class="empty" style="padding:24px 0">결과가 없어요.</div>';
+        listEl.querySelectorAll('.picker-row').forEach((row) => row.addEventListener('change', () => {
+          const id = row.dataset.id;
+          if (mode === 'radio') { sel.clear(); sel.add(id); }
+          else { row.querySelector('input').checked ? sel.add(id) : sel.delete(id); }
+        }));
+      };
+      search.addEventListener('input', paint); paint();
+      ov.querySelector('#pk-confirm').addEventListener('click', async () => { await onConfirm([...sel]); ov._close(); });
+    }
+
+    // 중앙 모달 헬퍼
+    function mk(inner) {
+      const ov = document.createElement('div'); ov.className = 'modal-overlay center';
+      ov.innerHTML = `<div class="modal">${inner}</div>`;
+      document.body.appendChild(ov); document.body.classList.add('modal-open');
+      ov._close = () => { ov.remove(); document.body.classList.remove('modal-open'); };
+      ov.addEventListener('click', (e) => { if (e.target === ov) ov._close(); });
+      const x = ov.querySelector('#x'); if (x) x.addEventListener('click', ov._close);
+      return ov;
+    }
+
+    load();
+  </script>
+</body>
+</html>

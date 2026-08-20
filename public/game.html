@@ -53,7 +53,7 @@
       const main = document.getElementById('game-main');
       if (gameRes.error || !gameRes.data) { main.innerHTML = '<div class="empty">게임을 찾을 수 없어요. (삭제되었을 수 있습니다)</div>'; return; }
       const game = gameRes.data; backRoom = game.room_id;
-      const canManage = (await sb.rpc('has_room_perm', { p_room_id: game.room_id, p_perm: 'event' })).data === true;
+      const canManage = (await sb.rpc('has_room_perm', { p_room_id: game.room_id, p_perm: 'operate_game' })).data === true;
       const participants = (partRes.data || []).filter((r) => r.user).map((r) => ({ ...r.user, games_played: r.games_played }));
       const matches = matchRes.data || [];
       const statusMap = {}; matches.forEach((m) => (m.players || []).forEach((pp) => { if (pp.user) statusMap[pp.user.id] = m.status; }));

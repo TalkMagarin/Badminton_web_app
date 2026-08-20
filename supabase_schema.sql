@@ -56,7 +56,11 @@ alter table public.room_members add column if not exists role text not null defa
 alter table public.room_members add column if not exists status text not null default 'approved';        -- pending | approved
 alter table public.room_members add column if not exists can_approve boolean not null default false;      -- 가입승인 권한(운영진)
 alter table public.room_members add column if not exists can_reject boolean not null default false;       -- 가입거부 권한(운영진)
-alter table public.room_members add column if not exists can_create_event boolean not null default false; -- 정모/번개 생성 권한(운영진)
+alter table public.room_members add column if not exists can_create_event boolean not null default false; -- 게임 생성 권한(운영진)
+alter table public.room_members add column if not exists can_kick boolean not null default false;          -- 모임 추방 권한(운영진)
+alter table public.room_members add column if not exists can_operate_game boolean not null default false;  -- 게임 운영 권한(참석자/대기/코트/완료)
+-- 하위호환: 기존 게임 생성 권한자에게 게임 운영 권한도 부여
+update public.room_members set can_operate_game = true where can_create_event = true and can_operate_game = false;
 
 -- 기존 방장 멤버십을 owner 역할로 복구(마이그레이션 기본값 보정)
 update public.room_members m set role = 'owner'
@@ -208,7 +212,9 @@ returns boolean language sql stable security definer set search_path = public as
             or (role = 'staff' and (
                  (p_perm = 'approve' and can_approve)
               or (p_perm = 'reject'  and can_reject)
-              or (p_perm = 'event'   and can_create_event)
+              or (p_perm = 'kick'    and can_kick)
+              or (p_perm in ('create_game','event') and can_create_event)
+              or (p_perm = 'operate_game' and can_operate_game)
             )))
   );
 $$;
@@ -233,10 +239,12 @@ begin
 end;
 $$;
 
--- 운영진 지정/권한 설정 (owner 만). p_role: 'staff' | 'member'
+-- 운영진 지정/권한 설정 (owner 만). p_role: 'staff' | 'member'. 권한 5종.
+drop function if exists public.set_member_role(uuid, uuid, text, boolean, boolean, boolean);
 create or replace function public.set_member_role(
   p_room_id uuid, p_user uuid, p_role text,
-  p_can_approve boolean, p_can_reject boolean, p_can_event boolean
+  p_can_approve boolean, p_can_reject boolean, p_can_kick boolean,
+  p_can_create_game boolean, p_can_operate_game boolean
 ) returns void language plpgsql security definer set search_path = public as $$
 begin
   if not exists (select 1 from room_members
@@ -247,9 +255,21 @@ begin
   if p_role not in ('staff', 'member') then raise exception 'bad role'; end if;
   update room_members
      set role = p_role,
-         can_approve = case when p_role = 'staff' then coalesce(p_can_approve,false) else false end,
-         can_reject  = case when p_role = 'staff' then coalesce(p_can_reject,false)  else false end,
-         can_create_event = case when p_role = 'staff' then coalesce(p_can_event,false) else false end
+         can_approve      = case when p_role = 'staff' then coalesce(p_can_approve,false) else false end,
+         can_reject       = case when p_role = 'staff' then coalesce(p_can_reject,false)  else false end,
+         can_kick         = case when p_role = 'staff' then coalesce(p_can_kick,false)    else false end,
+         can_create_event = case when p_role = 'staff' then coalesce(p_can_create_game,false) else false end,
+         can_operate_game = case when p_role = 'staff' then coalesce(p_can_operate_game,false) else false end
+   where room_id = p_room_id and user_id = p_user and status = 'approved' and role <> 'owner';
+end;
+$$;
+
+-- 모임원 추방 (추방 권한자, owner 제외 대상)
+create or replace function public.kick_member(p_room_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not has_room_perm(p_room_id, 'kick') then raise exception 'no permission'; end if;
+  delete from room_members
    where room_id = p_room_id and user_id = p_user and status = 'approved' and role <> 'owner';
 end;
 $$;
@@ -268,10 +288,10 @@ begin
     raise exception 'target not member';
   end if;
   -- 기존 모임장 → 일반 참여자
-  update room_members set role = 'member', can_approve = false, can_reject = false, can_create_event = false
+  update room_members set role = 'member', can_approve = false, can_reject = false, can_kick = false, can_create_event = false, can_operate_game = false
    where room_id = p_room_id and user_id = auth.uid();
   -- 새 모임장
-  update room_members set role = 'owner', can_approve = false, can_reject = false, can_create_event = false
+  update room_members set role = 'owner', can_approve = false, can_reject = false, can_kick = false, can_create_event = false, can_operate_game = false
    where room_id = p_room_id and user_id = p_user;
   update rooms set host_id = p_user where id = p_room_id;
 end;
@@ -295,7 +315,8 @@ $$;
 grant execute on function public.has_room_perm(uuid, text) to authenticated;
 grant execute on function public.approve_member(uuid, uuid) to authenticated;
 grant execute on function public.reject_member(uuid, uuid) to authenticated;
-grant execute on function public.set_member_role(uuid, uuid, text, boolean, boolean, boolean) to authenticated;
+grant execute on function public.set_member_role(uuid, uuid, text, boolean, boolean, boolean, boolean, boolean) to authenticated;
+grant execute on function public.kick_member(uuid, uuid) to authenticated;
 grant execute on function public.transfer_ownership(uuid, uuid) to authenticated;
 grant execute on function public.delete_empty_room(uuid) to authenticated;
 
@@ -373,7 +394,7 @@ declare rid uuid; cap int; cur int;
 begin
   select room_id, max_players into rid, cap from games where id = p_game_id;
   if rid is null then raise exception 'no game'; end if;
-  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if not has_room_perm(rid, 'operate_game') then raise exception 'no permission'; end if;
   if not exists (select 1 from room_members where room_id = rid and user_id = p_user and status = 'approved') then
     raise exception 'not a member';
   end if;
@@ -390,7 +411,7 @@ returns void language plpgsql security definer set search_path = public as $$
 declare rid uuid;
 begin
   select room_id into rid from games where id = p_game_id;
-  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if not has_room_perm(rid, 'operate_game') then raise exception 'no permission'; end if;
   if exists (select 1 from match_players mp join matches mm on mm.id = mp.match_id
              where mm.game_id = p_game_id and mp.user_id = p_user) then
     raise exception 'in match';
@@ -405,7 +426,7 @@ declare rid uuid; mid uuid; u uuid;
 begin
   select room_id into rid from games where id = p_game_id;
   if rid is null then raise exception 'no game'; end if;
-  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if not has_room_perm(rid, 'operate_game') then raise exception 'no permission'; end if;
   if array_length(p_users, 1) is distinct from 4 then raise exception 'need 4'; end if;
   if exists (select 1 from unnest(p_users) uu
              where uu not in (select user_id from game_participants where game_id = p_game_id)) then
@@ -430,7 +451,7 @@ begin
   select g.room_id, g.id, g.courts into rid, gid, ncourts
     from matches m join games g on g.id = m.game_id where m.id = p_match_id;
   if rid is null then raise exception 'no match'; end if;
-  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if not has_room_perm(rid, 'operate_game') then raise exception 'no permission'; end if;
   if p_court < 1 or p_court > ncourts then raise exception 'bad court'; end if;
   if exists (select 1 from matches where game_id = gid and status = 'playing' and court = p_court and id <> p_match_id) then
     raise exception 'court busy';
@@ -446,7 +467,7 @@ begin
   select g.room_id, m.game_id, m.status into rid, gid, st
     from matches m join games g on g.id = m.game_id where m.id = p_match_id;
   if rid is null then raise exception 'no match'; end if;
-  if not has_room_perm(rid, 'event') then raise exception 'no permission'; end if;
+  if not has_room_perm(rid, 'operate_game') then raise exception 'no permission'; end if;
   if st = 'playing' then
     update game_participants gp set games_played = games_played + 1
      where gp.game_id = gid
